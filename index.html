@@ -1,0 +1,2071 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Concursos">
+<meta name="theme-color" content="#090d16">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="apple-touch-icon.png">
+<title>Estudos para Concursos</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400..700&family=Source+Serif+4:opsz,wght@8..60,400..700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+/* ===== Núcleo de Estudos: dashboard + revisão IA ===== */
+let revisaoEstado = {selecionada:"", historico:[], erros:[], ultima:null};
+let revUnsub = null;
+const REV_KEY = "revisao_ia";
+function revLocal(){ try{return JSON.parse(localStorage.getItem(REV_KEY)||"null")}catch(e){return null} }
+function salvarRevisao(){
+  try{localStorage.setItem(REV_KEY,JSON.stringify(revisaoEstado))}catch(e){}
+  if(user) setDoc(cfgRef("revisao_ia"),revisaoEstado,{merge:false}).catch(falha);
+}
+function revMateriaOptions(){
+  const all=[...(materias||[]).map(m=>({id:m.id,nome:m.nome})),...((conteudo?.regular||[]).map((m,i)=>({id:"cont-r-"+i,nome:m.nome}))),...((conteudo?.passe||[]).map((m,i)=>({id:"cont-p-"+i,nome:m.nome})))];
+  const seen=new Set(); return all.filter(x=>{const k=sem(x.nome);if(!x.nome||seen.has(k))return false;seen.add(k);return true}).sort((a,b)=>a.nome.localeCompare(b.nome,"pt-BR"));
+}
+function revDadosMateria(nome){
+  const mm=(materias||[]).filter(m=>sem(m.nome)===sem(nome));
+  const ls=mm.flatMap(m=>listas.filter(l=>l.materia===m.id));
+  const qs=ls.flatMap(l=>l.questoes.map(q=>({lista:l.nome,q,resposta:l.respostas?.[q.num]||"",gabarito:l.gabarito?.[q.num]||""})));
+  const erros=qs.filter(x=>x.resposta&&x.gabarito&&x.gabarito!=="ANULADA"&&x.resposta!==x.gabarito).slice(-25);
+  return {listas:ls.length,questoes:qs.length,erros};
+}
+function revBasePrompt(nome){
+  const d=revDadosMateria(nome);
+  const base=d.erros.map((x,i)=>`ERRO ${i+1}: ${limpar(enunciadoTexto(x.q)).slice(0,1400)} | resposta=${x.resposta} | gabarito=${x.gabarito}`).join("\n\n");
+  return `CONCURSO-ALVO: SEFAZ-MG — Auditor Fiscal. BANCA: FGV.\nMATÉRIA: ${nome}.\n\nDADOS LOCAIS DE DESEMPENHO: ${d.questoes} questões cadastradas; ${d.erros.length} erros recentes identificados.\n${base||"Ainda não há erros locais suficientes."}\n\nINSTRUÇÕES: priorize incidência comprovada somente quando houver fonte/prova identificável no material recebido. Nunca invente estatística. Se não houver corpus verificável, diga claramente que se trata de padrão provável da FGV, não de incidência comprovada. Questões reais devem ser marcadas como REAIS e só podem ser reproduzidas quando o texto estiver disponível no corpus; caso contrário, crie questão INÉDITA e marque como IA.`;
+}
+const SISTEMA_REVISAO=`Você é um professor sênior de preparação para Auditor Fiscal, especialista em FGV e SEFAZ-MG. Sua tarefa é montar uma revisão de alto nível, objetiva e rigorosa. Nunca invente prova, gabarito, artigo, jurisprudência ou estatística. Separe claramente evidência comprovada de inferência. Identifique pegadinhas típicas da FGV e explique o raciocínio. Ao criar questões inéditas, faça-as difíceis, com distratores plausíveis e nível Auditor Fiscal. Ao analisar erros do aluno, adapte a revisão aos erros fornecidos. Responda em português do Brasil usando exatamente os blocos: ### Diagnóstico do tema; ### O que mais cai (comprovado); ### Pegadinhas da FGV; ### Revisão de alto rendimento; ### Questões reais disponíveis; ### Questões inéditas de nível Auditor Fiscal; ### Plano de reforço. Nas questões, informe claramente [REAL] ou [INÉDITA — IA], e em cada questão inédita apresente gabarito e comentário das alternativas. Se não houver questão real no material fornecido, escreva 'Nenhuma questão real disponível no corpus local' em vez de inventar uma.`;
+function revRenderSections(txt){
+  return mdSecoes(txt||"").replace(/\[REAL\]/g,'<span class="qtag">REAL · prova</span>').replace(/\[INÉDITA — IA\]/g,'<span class="qtag ai">INÉDITA · IA</span>');
+}
+async function gerarRevisaoIA(nome,forcar=false,modo="completa"){
+  const el=$("revResultado"), c=cfgIA();
+  if(!nome){aviso("Escolha uma matéria primeiro.");return}
+  if(!c.prov){el.innerHTML='<div class="revempty"><b>IA ainda não configurada.</b><p>Abra ⚙️ IA e escolha o provedor configurado no servidor.</p><button class="pri" data-revcfg="1">Configurar IA</button></div>';return}
+  const chave=sem(nome);
+  if(!forcar && revisaoEstado.ultima && revisaoEstado.ultima.materiaKey===chave){el.innerHTML=revRenderSections(revisaoEstado.ultima.texto);return}
+  el.innerHTML='<div class="revloading">🤖 Preparando revisão direcionada para SEFAZ-MG / FGV…<br><small>Estou cruzando o tema com seus erros locais e separando incidência comprovada de padrão provável.</small></div>';
+  try{
+    const instrucoesModo={completa:"Faça uma revisão completa: diagnóstico, teoria de alto rendimento, pegadinhas e questões.",erros:"Concentre-se exclusivamente nos erros locais fornecidos. Explique o padrão de erro, a regra que faltou e gere questões de reforço sobre esses pontos.",questoes:"Entregue predominantemente questões: 5 questões inéditas difíceis, com gabarito e comentário de todas as alternativas; inclua uma revisão mínima das regras necessárias."};
+    const prompt=revBasePrompt(nome)+`\n\nMODO DE REVISÃO: ${modo}. ${instrucoesModo[modo]||instrucoesModo.completa} Inclua questões reais somente se estiverem no corpus fornecido. Para cada questão, explique todas as alternativas. No bloco de incidência, não use números exatos sem fonte.`;
+    const r=await chamarIA(SISTEMA_REVISAO,prompt,c,(m)=>{el.innerHTML='<div class="revloading">🤖 '+esc(m)+'</div>'});
+    revisaoEstado.selecionada=nome; revisaoEstado.ultima={materiaKey:chave,materia:nome,modo,texto:r.txt,modelo:r.modelo,ts:Date.now()};
+    revisaoEstado.historico=(revisaoEstado.historico||[]).slice(-9).concat([{materia:nome,ts:Date.now()}]);
+    salvarRevisao(); el.innerHTML=revRenderSections(r.txt); aviso("Revisão gerada e salva.");
+  }catch(e){el.innerHTML='<div class="revempty">❌ Não foi possível gerar a revisão.<br><small>'+esc(e.message||String(e))+'</small><br><button class="pri" data-revcfg="1">Ver configuração da IA</button></div>'}
+}
+function renderRevisao(){
+  const el=$("secRevisao"), opts=revMateriaOptions(), sel=revisaoEstado.selecionada||opts[0]?.nome||"";
+  el.innerHTML=`<div class="revhead"><div><span class="revbadge">🎓 SEFAZ-MG · FGV</span><h2 class="revtitle">Revisão inteligente</h2><p class="muted">Uma revisão orientada pelos seus erros, pela incidência verificável e pelo padrão de cobrança da FGV.</p></div><button data-revcfg="1">⚙️ IA</button></div>
+  <div class="revcontrols"><select id="revMateria"><option value="">Escolha a matéria…</option>${opts.map(o=>`<option value="${esc(o.nome)}" ${sem(o.nome)===sem(sel)?"selected":""}>${esc(o.nome)}</option>`).join("")}</select><select id="revModo"><option value="completa">Revisão completa</option><option value="erros">Foco nos meus erros</option><option value="questoes">Só questões</option></select><button class="pri" data-revgerar="1">Gerar revisão</button></div>
+  <div class="revlayout"><main class="revpanel"><div id="revResultado"><div class="revempty"><b>Escolha uma matéria.</b><p>A IA vai montar teoria, incidência, pegadinhas e questões no nível Auditor Fiscal.</p></div></div></main>
+  <aside class="revside"><div class="statbox"><span class="muted">Histórico de revisões</span><div class="num">${(revisaoEstado.historico||[]).length}</div><small class="muted">sessões salvas</small></div><div class="statbox"><h3>Como a IA decide</h3><p class="muted">1. Seus erros locais<br>2. Corpus de questões disponível<br>3. Padrões da FGV<br>4. Questões inéditas difíceis</p></div><div class="statbox"><h3>Importante</h3><p class="muted">“Comprovado” só será usado quando houver fonte verificável. O restante será identificado como padrão provável.</p></div></aside></div>`;
+  if(revisaoEstado.ultima&&sem(revisaoEstado.ultima.materiaKey||"")===sem(sel))$("revResultado").innerHTML=revRenderSections(revisaoEstado.ultima.texto);
+}
+const CADERNO_KEY = "caderno_erros";
+let cadernoEstado = {notas:{}, revisados:{}};
+function carregarCaderno(){ try { const x=JSON.parse(localStorage.getItem(CADERNO_KEY)||"null"); if(x) cadernoEstado={...cadernoEstado,...x}; } catch(e){} }
+function salvarCaderno(){ try{localStorage.setItem(CADERNO_KEY,JSON.stringify(cadernoEstado));}catch(e){} if(user) setDoc(cfgRef("caderno_erros"),cadernoEstado,{merge:false}).catch(falha); }
+function errosCaderno(){
+  const out=[];
+  (listas||[]).forEach(L=>{ const mat=(materias.find(m=>m.id===L.materia)||{}).nome||""; (L.questoes||[]).forEach(q=>{ const r=L.respostas?.[q.num], g=L.gabarito?.[q.num]; if(r&&g&&g!=="ANULADA"&&r!==g) out.push({id:`${L.id}|${q.num}`,lista:L,nomeMat:mat,q,resposta:r,gabarito:g}); }); });
+  return out.sort((a,b)=>a.id.localeCompare(b.id));
+}
+function renderCaderno(){
+  carregarCaderno(); const el=$("secCaderno"), erros=errosCaderno();
+  if(!erros.length){el.innerHTML='<div class="ctop"><span class="revbadge">CADERNO DE ERROS</span><h2>Seu caderno está vazio</h2><p class="muted">Os erros passam a aparecer aqui automaticamente depois que você corrigir questões.</p></div>';return;}
+  const pend=erros.filter(x=>!cadernoEstado.revisados[x.id]);
+  el.innerHTML=`<div class="ctop"><span class="revbadge">CADERNO DE ERROS</span><h2>Aprenda com o que você errou.</h2><p class="muted">${pend.length} erros pendentes de revisão · ${erros.length} erros registrados.</p></div><div class="card notebook">${erros.map(x=>{const n=cadernoEstado.notas[x.id]||"";return `<article class="errorcard ${cadernoEstado.revisados[x.id]?"done":""}"><div class="errorcardhead"><div><b>${esc(x.nomeMat)}</b><span class="muted"> · ${esc(x.lista.nome)} · Questão ${x.q.num}</span></div><button class="mini" data-caderno-review="${esc(x.id)}">${cadernoEstado.revisados[x.id]?"↩ Revisar de novo":"✓ Marcar revisado"}</button></div><p class="errorenun">${esc(limpar(x.q.enunciado).slice(0,900))}</p><div class="erranswers"><span>Você marcou <b>${esc(x.resposta)}</b></span><span>Gabarito <b>${esc(x.gabarito)}</b></span></div><textarea data-caderno-note="${esc(x.id)}" placeholder="Regra que eu devo lembrar…">${esc(n)}</textarea><button class="pri small" data-caderno-save="${esc(x.id)}">Salvar regra</button></article>`}).join("")}</div>`;
+}
+function renderInicio(){
+  const el=$("secInicio"), opts=revMateriaOptions(), st=opts.length, ult=revisaoEstado.ultima;
+  const d=ult?revDadosMateria(ult.materia):null;
+  const rec=(() => { const a=(materias||[]).map(m=>{let ac=0,er=0,pend=0; (listas||[]).filter(l=>l.materia===m.id).forEach(l=>(l.questoes||[]).forEach(q=>{const r=l.respostas?.[q.num],g=l.gabarito?.[q.num]; if(r&&g&&g!=="ANULADA"){if(r===g)ac++;else er++;} else pend++;})); const corr=ac+er; return {m,ac,er,pend,pct:corr?ac/corr*100:0,score:er*3+pend*0.15};}).sort((a,b)=>b.score-a.score)[0]; return a; })();
+  el.innerHTML=`<div class="ctop"><span class="revbadge">NÚCLEO DE ESTUDOS</span><h2>Seu painel de estudos</h2><p class="muted">Preparação focada em <b>SEFAZ-MG — Auditor Fiscal</b>, com questões, conteúdo, diagnóstico e revisão por IA.</p></div><div class="homegrid"><div><div class="homehero"><span class="homeeyebrow">Plano de estudo</span><h1>Estude com intenção.</h1><p>Use seus erros para decidir o que revisar, pratique no nível da prova e transforme cada revisão em uma etapa de domínio.</p><div class="recommendation"><b>Próxima sessão recomendada</b><strong>${rec?esc(rec.m.nome):"Cadastre uma matéria"}</strong><span>${rec?`${rec.er} erros · ${rec.pct.toFixed(0)}% de acerto · ${rec.pend} pendentes`:"Comece adicionando questões"}</span></div><button class="pri" data-recom-mat="${rec?.m.id||""}">${rec?"Começar sessão recomendada →":"Começar revisão inteligente →"}</button></div><div class="homecards"><div class="homecard"><span class="homeicon">📚</span><b>${st} matérias</b><small class="muted">cadastradas no conteúdo</small></div><div class="homecard"><span class="homeicon">🎯</span><b>${d?d.erros.length:0} erros recentes</b><small class="muted">usados para adaptação</small></div><div class="homecard"><span class="homeicon">🤖</span><b>${ult?"Revisão salva":"Pronto para revisar"}</b><small class="muted">histórico persistente</small></div></div></div><div class="homeactions"><button class="homeaction" data-secnav="questoes"><span class="homeicon">✓</span><span><strong>Questões</strong><small>Resolver e corrigir</small></span></button><button class="homeaction" data-secnav="diagnostico"><span class="homeicon">◔</span><span><strong>Diagnóstico</strong><small>Ver pontos fracos</small></span></button><button class="homeaction" data-secnav="conteudo"><span class="homeicon">▱</span><span><strong>Conteúdo</strong><small>Organizar matérias</small></span></button><button class="homeaction" data-secnav="revisao"><span class="homeicon">↻</span><span><strong>Revisão IA</strong><small>FGV · SEFAZ-MG</small></span></button></div></div>`;
+}
+// Substitui a navegação antiga sem tocar na persistência do Cronograma.
+mostrarSecao=function(sec){secao=sec;saveUi();["inicio","questoes","diagnostico","conteudo","revisao","cronograma"].forEach(k=>{const e=$("sec"+k[0].toUpperCase()+k.slice(1));if(e)e.hidden=k!==sec});document.querySelectorAll(".mi").forEach(b=>b.classList.toggle("on",b.dataset.sec===sec));if(sec==="inicio")renderInicio();else if(sec==="questoes")render();else if(sec==="diagnostico")renderDiag();else if(sec==="conteudo")renderConteudo();else if(sec==="revisao")renderRevisao()};
+// Evita reabrir a aba removida mesmo se uma preferência antiga apontar para cronograma.
+if(secao==="cronograma")secao="inicio";
+
+document.addEventListener("click",e=>{
+  const t=e.target.closest("[data-secnav],[data-revgerar],[data-revcfg]");if(!t)return;
+  if(t.dataset.secnav){mostrarSecao(t.dataset.secnav);return}
+  if(t.dataset.revcfg){abrirCfg();return}
+  if(t.dataset.revgerar){const m=$("revMateria")?.value, modo=$("revModo")?.value||"completa";revisaoEstado.selecionada=m||"";gerarRevisaoIA(m,true,modo);return}
+});
+document.addEventListener("change",e=>{if(e.target.id==="revMateria"){revisaoEstado.selecionada=e.target.value;salvarRevisao()}});
+
+// Carrega a configuração de revisão sem interferir nos listeners existentes.
+onAuthStateChanged(auth,u=>{
+  if(revUnsub){try{revUnsub()}catch(e){}revUnsub=null}
+  if(!u)return;
+  const local=revLocal();if(local)revisaoEstado={...revisaoEstado,...local}; carregarCaderno();
+  revUnsub=onSnapshot(cfgRef("revisao_ia"),s=>{if(s.exists()){revisaoEstado={...revisaoEstado,...s.data()};if(secao==="revisao")renderRevisao();if(secao==="inicio")renderInicio()}},()=>{});
+  setTimeout(()=>{if(secao==="inicio")mostrarSecao("inicio")},150);
+});
+
+</script>
+<style>
+/* =====================================================================
+   Estudos para Concursos — folha de estilo única
+   Slate dark + glassmorphism. Sans para a interface, serifa para leitura.
+   ===================================================================== */
+:root{
+  color-scheme:dark;
+  --bg:#090d16;
+  --glass:rgba(15,23,42,.62);
+  --glass-2:rgba(13,19,34,.92);
+  --raise:rgba(148,163,184,.06);
+  --raise-2:rgba(148,163,184,.11);
+  --line:rgba(148,163,184,.13);
+  --line-2:rgba(148,163,184,.24);
+  --txt:#e6ebf2;
+  --txt-2:#c3ccd9;
+  --mut:#8693a7;
+  --head:#f4f7fb;
+  --acc:#72b8c8;
+  --acc-2:#3e8597;
+  --acc-bg:rgba(114,184,200,.12);
+  --ok:#5cc49f;  --ok-bg:rgba(92,196,159,.12);
+  --err:#ee8080; --err-bg:rgba(238,128,128,.11);
+  --warn:#e2b464;--warn-bg:rgba(226,180,100,.12);
+  --lav:#b6a6e8;
+  --r-l:18px; --r-m:12px; --r-s:9px;
+  --blur:blur(14px);
+  --sans:"Instrument Sans",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --serif:"Source Serif 4","Iowan Old Style","Palatino Linotype",Georgia,serif;
+  --ease:cubic-bezier(.2,.8,.2,1);
+  /* nomes antigos, mantidos por compatibilidade */
+  --pri:var(--acc); --bd:var(--line); --card:var(--glass);
+}
+
+/* ---------- base ---------- */
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;font:15px/1.55 var(--sans);color:var(--txt);-webkit-font-smoothing:antialiased;
+  background:radial-gradient(1100px 620px at -5% -15%,rgba(62,133,151,.11),transparent 62%),var(--bg);background-attachment:fixed}
+h1,h2,h3,h4{margin:0;font-weight:600;letter-spacing:-.01em;color:var(--head)}
+p{margin:0 0 10px}
+b,strong{font-weight:600}
+.muted,small{color:var(--mut)}
+.muted{font-size:.88rem}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+::selection{background:rgba(114,184,200,.3)}
+
+/* ---------- controles ---------- */
+input,button,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer;padding:9px 14px;border-radius:var(--r-s);border:1px solid var(--line);background:var(--raise);
+  color:var(--txt-2);font-size:.9rem;font-weight:500;line-height:1.3;transition:background .18s,border-color .18s,color .18s,transform .12s}
+@media(hover:hover){:where(button):hover{background:var(--raise-2);border-color:var(--line-2);color:var(--txt)}}
+button:active{transform:scale(.98)}
+button:disabled{opacity:.42;cursor:not-allowed;transform:none}
+button.pri,.addbig{background:#e6ebf2;color:#0b1220;border-color:transparent;font-weight:600}
+@media(hover:hover){button.pri:hover,.addbig:hover{background:#fff;color:#0b1220;border-color:transparent}}
+button.pri:disabled{background:#e6ebf2;color:#0b1220}
+button.link{background:none;border:0;padding:6px 0;color:var(--acc);text-decoration:underline;text-underline-offset:3px}
+button.ghost{background:transparent}
+input:where(:not([type=checkbox],[type=radio],[type=file])),select,textarea{padding:10px 12px;border-radius:var(--r-s);
+  border:1px solid var(--line);background:rgba(2,6,23,.35);color:var(--txt);transition:border-color .18s,box-shadow .18s}
+input::placeholder{color:#5f6b7e}
+input:focus,select:focus,textarea:focus{outline:0;border-color:var(--acc-2);box-shadow:0 0 0 3px rgba(114,184,200,.16)}
+select option{background:#0f172a;color:var(--txt)}
+input[type=checkbox],input[type=radio]{accent-color:var(--acc)}
+input[type=file]{font-size:.84rem;color:var(--mut);max-width:100%}
+input[type=file]::file-selector-button{font:inherit;font-weight:500;margin-right:12px;padding:8px 14px;border-radius:var(--r-s);
+  border:1px solid var(--line-2);background:var(--raise-2);color:var(--txt);cursor:pointer}
+summary{cursor:pointer}
+
+/* ---------- superfícies de vidro ---------- */
+.card,.center,.mcard,.kdia,.drow,.iabox,.retomar{background:var(--glass);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);
+  border:1px solid var(--line);border-radius:var(--r-l)}
+.card{padding:22px 24px;margin:0 0 20px}
+
+/* ---------- login ---------- */
+.center{max-width:400px;margin:calc(12vh + env(safe-area-inset-top)) auto 40px;padding:40px 32px 32px}
+.lbrand{display:flex;align-items:center;gap:12px;margin-bottom:32px;font-weight:600;color:var(--head)}
+.center h2{font-family:var(--serif);font-size:1.75rem;margin-bottom:6px}
+.lsubt{margin-bottom:26px}
+#formLogin input:not([type=checkbox]){width:100%;margin-bottom:10px}
+#formLogin button{width:100%;margin-top:8px}
+#formLogin button.link{width:auto;display:block;margin:14px auto 0}
+.lembrar{display:flex;gap:8px;align-items:center;margin:4px 0 12px;font-size:.88rem;color:var(--mut)}
+.erro{color:var(--err);min-height:1.2em;font-size:.88rem;margin:12px 0 0;text-align:center}
+
+/* ---------- estrutura ---------- */
+#app{display:flex;min-height:100vh;padding-top:env(safe-area-inset-top)}
+#side{flex:0 0 256px;width:256px;position:sticky;top:0;height:100vh;display:flex;flex-direction:column;gap:22px;padding:26px 16px 18px;
+  border-right:1px solid var(--line);background:rgba(9,13,22,.55);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);
+  overflow:hidden;transition:width .28s var(--ease),flex-basis .28s var(--ease)}
+.sbrand{display:flex;align-items:center;gap:12px;padding:0 8px;font-weight:600;font-size:1rem;color:var(--head)}
+.sbrand small{display:block;font-weight:400;font-size:.76rem;color:var(--mut)}
+.logo{flex:0 0 34px;height:34px;border-radius:10px;display:grid;place-items:center;border:1px solid var(--line-2);
+  background:var(--raise);font-family:var(--serif);font-size:1.15rem;color:var(--acc)}
+.perfil{display:flex;flex-direction:column;gap:12px;padding:14px;border-radius:var(--r-m);background:var(--raise);border:1px solid var(--line)}
+.pinfo{display:flex;gap:11px;align-items:center;min-width:0}
+#avatar{flex:0 0 36px;height:36px;border-radius:50%;display:grid;place-items:center;font-weight:600;color:var(--acc);
+  background:var(--acc-bg);border:1px solid rgba(114,184,200,.3)}
+.ptxt{min-width:0;display:flex;flex-direction:column;gap:2px}
+#usuario{font-size:.86rem;color:var(--head);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#statusCiclo{font-size:.74rem;line-height:1.45}
+#sair,#colapsar{display:flex;align-items:center;justify-content:center;gap:8px;padding:8px 10px;font-size:.82rem;color:var(--mut);background:transparent}
+#side svg,.mi svg{width:19px;height:19px;flex:0 0 19px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+#menu{display:flex;flex-direction:column;gap:2px}
+.mi{position:relative;display:flex;align-items:center;gap:12px;width:100%;padding:11px 12px;border-radius:10px;border:1px solid transparent;
+  background:transparent;color:var(--mut);font-weight:500;text-align:left}
+.mi.on{color:var(--head);background:var(--raise-2);border-color:var(--line)}
+.mi.on::before{content:"";position:absolute;left:-16px;top:11px;bottom:11px;width:2px;border-radius:2px;background:var(--acc)}
+.matbox{flex:1 1 0;min-height:0;display:flex;flex-direction:column;gap:10px;padding-top:18px;border-top:1px solid var(--line)}
+.mathead{display:flex;align-items:center;justify-content:space-between;padding:0 4px 0 8px;font-size:.8rem;font-weight:500;color:var(--mut)}
+.mathead button{width:28px;height:28px;padding:0;border-radius:8px;font-size:1rem;line-height:1}
+#buscaMat,#buscaMat2{width:100%;padding:9px 12px;font-size:.86rem}
+.matlist{overflow-y:auto;flex:1;min-height:0;display:flex;flex-direction:column;gap:2px;-webkit-overflow-scrolling:touch}
+dialog .matlist{max-height:55vh;margin-top:12px}
+.mitem{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border-radius:8px;border:1px solid transparent;
+  background:transparent;color:var(--mut);font-weight:400;text-align:left}
+.mitem.on{color:var(--head);background:var(--raise-2);border-color:var(--line)}
+.mdot2{flex:0 0 7px;height:7px;border-radius:50%;background:hsl(var(--h) 45% 62%)}
+.mn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.87rem}
+.mc{font-size:.72rem;color:var(--mut);font-variant-numeric:tabular-nums}
+.mobonly{display:none}
+
+.conteudo{flex:1;min-width:0;padding:48px 56px 72px}
+.conteudo>section{max-width:1040px;margin:0 auto}
+.conteudo>section:not([hidden]){animation:fade .3s var(--ease)}
+
+/* ---------- cabeçalhos de página ---------- */
+.ctop,.phead{display:flex;flex-wrap:wrap;gap:16px 24px;align-items:flex-end;justify-content:space-between;margin:0 0 32px}
+.ctop h2,.phead h2{font-family:var(--serif);font-weight:600;font-size:clamp(1.6rem,2.4vw,2.1rem);line-height:1.15;letter-spacing:-.015em;overflow-wrap:anywhere}
+.phead{margin-bottom:24px}
+.savechip{display:block;margin-top:8px;font-size:.8rem;color:var(--mut)}
+.ctopbtns,.rhbtns{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.addbig{padding:11px 18px;border-radius:10px;font-size:.92rem}
+button.ghost{padding:11px 18px;border-radius:10px}
+.row-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.cardh{display:flex;align-items:baseline;gap:10px;margin-bottom:8px}
+.count{font-size:.8rem;color:var(--mut);font-variant-numeric:tabular-nums}
+
+/* ---------- continuar de onde parei ---------- */
+.retomar{position:relative;display:grid;grid-template-columns:1fr auto;gap:16px 32px;align-items:end;padding:24px 28px 30px;margin:0 0 40px;
+  overflow:hidden;border-color:rgba(114,184,200,.24);background:linear-gradient(120deg,rgba(62,133,151,.16),rgba(15,23,42,.62) 58%)}
+.rt-top{grid-column:1/-1;display:flex;justify-content:space-between;gap:12px;font-size:.82rem;color:var(--mut)}
+.rt-top b{color:var(--acc);font-weight:500}
+.rt-mat{font-size:.9rem;color:var(--txt-2);margin-bottom:4px}
+.rt-tit{font-family:var(--serif);font-size:clamp(1.35rem,2.3vw,1.8rem);font-weight:600;line-height:1.2;letter-spacing:-.012em;color:var(--head);overflow-wrap:anywhere}
+.rt-tit.sm{font-size:1.15rem}
+.rt-det{margin-top:8px;font-size:.92rem;color:var(--txt-2);font-variant-numeric:tabular-nums}
+.rt-btn{white-space:nowrap;padding:12px 20px;font-size:.94rem}
+.rt-nota{grid-column:1/-1;margin-top:-6px;font-size:.78rem;color:var(--mut)}
+.rt-prog{position:absolute;left:0;right:0;bottom:0;height:3px;background:rgba(148,163,184,.1)}
+.rt-prog i{display:block;height:100%;background:var(--acc);border-radius:0 3px 3px 0;transition:width .5s var(--ease)}
+.retomar.vazio{grid-template-columns:1fr;padding:22px 24px;background:transparent;border-style:dashed;border-color:var(--line-2)}
+.retomar.vazio .rt-det{max-width:60ch;color:var(--mut)}
+
+/* ---------- questões: painel da matéria ---------- */
+.tools{display:flex;flex-wrap:wrap;gap:14px 22px;align-items:center}
+.tools label{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:.86rem;color:var(--mut)}
+.tools select{padding:8px 10px}
+#status{margin-top:14px;font-size:.84rem}
+#status:empty{display:none}
+.tools-card details{margin-top:12px}
+.pdfrow{display:flex;gap:12px;align-items:center;padding:12px 10px;border-bottom:1px solid var(--line);cursor:pointer;transition:background .15s}
+.pdfrow:last-child{border-bottom:0}
+@media(hover:hover){.pdfrow:hover{background:var(--raise)}}
+.pdfrow.on{background:var(--acc-bg);box-shadow:inset 2px 0 0 var(--acc);border-radius:8px}
+.pdfrow .nm{flex:1;min-width:0;font-weight:500;overflow-wrap:anywhere}
+.pdfrow button{padding:5px 8px;background:transparent;border-color:transparent;opacity:.6}
+@media(hover:hover){.pdfrow button:hover{opacity:1}}
+.stat{font-size:.78rem;color:var(--mut);white-space:nowrap;font-variant-numeric:tabular-nums}
+
+/* relatório */
+details.card>summary{list-style:none;display:flex;align-items:center;justify-content:space-between;gap:12px}
+details.card>summary::-webkit-details-marker{display:none}
+details.card>summary::after{content:"";flex:0 0 8px;height:8px;margin-right:4px;border-right:1.5px solid var(--mut);border-bottom:1.5px solid var(--mut);
+  transform:rotate(45deg) translateY(-3px);transition:transform .2s var(--ease)}
+details.card[open]>summary::after{transform:rotate(-135deg)}
+details.card h4{margin:24px 0 10px;font-size:.9rem;font-weight:500;color:var(--txt-2)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:1px;margin:18px 0 12px;background:var(--line);
+  border:1px solid var(--line);border-radius:var(--r-m);overflow:hidden}
+.stats div{padding:14px 16px;font-size:.78rem;color:var(--mut);background:rgba(10,15,27,.82)}
+.stats b{display:block;margin-bottom:2px;font-size:1.45rem;font-weight:600;letter-spacing:-.01em;color:var(--head);font-variant-numeric:tabular-nums}
+.bar{display:flex;height:6px;margin-top:12px;border-radius:99px;background:rgba(148,163,184,.12);overflow:hidden}
+.bar.big{height:8px}
+.bar i{display:block;height:100%}
+.s-acerto,.s-ok{background:var(--ok)}
+.s-erro,.s-alto{background:var(--err)}
+.s-pendente,.s-med{background:var(--warn)}
+.s-nd{background:rgba(148,163,184,.2)}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin:0 6px 0 12px}
+.dot:first-child{margin-left:0}
+.brow{display:grid;grid-template-columns:64px 1fr 44px;gap:12px;align-items:center;margin:6px 0;font-size:.82rem;color:var(--mut);font-variant-numeric:tabular-nums}
+.brow .bar{margin:0}
+.brow span:last-child{text-align:right}
+#refazer{margin-top:18px}
+
+/* filtros */
+.filtros{margin:8px 0 28px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:12px}
+.chips .muted{margin-right:4px}
+.chip{padding:6px 12px;border-radius:99px;font-size:.84rem}
+.chip.on,.tab.on{background:var(--acc-bg);border-color:rgba(114,184,200,.42);color:#d9f0f5}
+.faixa{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:.88rem;color:var(--txt-2)}
+#de,#ate{width:82px;padding:7px 10px}
+.filtros>.muted{margin:12px 0 0}
+
+/* cartão da questão */
+.card.q{padding:28px 30px 24px;margin-bottom:24px;transition:border-color .3s,box-shadow .3s}
+.q.ok{box-shadow:inset 3px 0 0 var(--ok)}
+.q.err{box-shadow:inset 3px 0 0 var(--err)}
+.q.pend{box-shadow:inset 3px 0 0 var(--warn)}
+.card.q.pulse{border-color:rgba(114,184,200,.6);box-shadow:0 0 0 3px rgba(114,184,200,.18)}
+.qhead{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-bottom:10px}
+.qnum{font-size:.92rem;font-weight:600;color:var(--txt-2);font-variant-numeric:tabular-nums}
+.qbtns{display:flex;gap:6px;flex-wrap:wrap}
+.ia-btn{padding:7px 12px;font-size:.84rem;color:var(--acc);border-color:rgba(114,184,200,.32);background:transparent}
+@media(hover:hover){.ia-btn:hover{background:var(--acc-bg);color:#d9f0f5;border-color:rgba(114,184,200,.5)}}
+.mini{padding:6px 10px;font-size:.8rem}
+.badges{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 18px}
+.badges:empty{display:none}
+.badge{font-size:.74rem;font-weight:500;padding:3px 10px;border-radius:99px;border:1px solid var(--line);color:var(--mut)}
+.badge.banca{color:var(--acc);border-color:rgba(114,184,200,.3)}
+.badge.ano{color:var(--warn);border-color:rgba(226,180,100,.3)}
+.badge.orgao{color:var(--ok);border-color:rgba(92,196,159,.3)}
+.badge.mat{color:var(--lav);border-color:rgba(182,166,232,.3)}
+.enun{font-family:var(--serif);font-size:1.12rem;line-height:1.75;color:#e9edf3;max-width:68ch;margin-bottom:22px}
+.enun p{margin:0 0 10px}
+.afirm{list-style:none;padding:0 0 0 4px;margin:10px 0}
+.afirm li{margin:8px 0}
+.afirm b{color:var(--acc)}
+.alts{display:flex;flex-direction:column;gap:8px}
+.altrow{display:flex;align-items:flex-start;border:1px solid var(--line);border-radius:var(--r-m);background:rgba(2,6,23,.25);transition:border-color .15s,background .15s}
+@media(hover:hover){.altrow:hover{border-color:var(--line-2)}}
+.altrow:focus-within{box-shadow:0 0 0 3px rgba(114,184,200,.14)}
+.alt{flex:1;display:flex;gap:14px;align-items:flex-start;min-width:0;padding:13px 8px 13px 16px;cursor:pointer;position:relative}
+.alt input{position:absolute;opacity:0;pointer-events:none}
+.letra{flex:0 0 28px;height:28px;border-radius:50%;display:grid;place-items:center;font-size:.8rem;font-weight:600;border:1px solid var(--line-2);color:var(--mut);transition:background .15s,color .15s,border-color .15s}
+.atxt{flex:1;padding-top:3px;line-height:1.6;color:var(--txt-2);overflow-wrap:anywhere}
+.altrow.sel{border-color:rgba(114,184,200,.55);background:var(--acc-bg)}
+.altrow.sel .letra{background:var(--acc);border-color:var(--acc);color:#071318}
+.altrow.certa{border-color:rgba(92,196,159,.6);background:var(--ok-bg)}
+.altrow.certa .letra{background:var(--ok);border-color:var(--ok);color:#06150f}
+.altrow.errada{border-color:rgba(238,128,128,.6);background:var(--err-bg)}
+.altrow.errada .letra{background:var(--err);border-color:var(--err);color:#1a0707}
+.altrow.cut{background:transparent;border-style:dashed}
+.altrow.cut .atxt{text-decoration:line-through;opacity:.45}
+.altrow.cut .letra{opacity:.45}
+.cut-btn{flex:0 0 auto;width:30px;height:30px;padding:0;margin:12px 10px 0 0;display:grid;place-items:center;border:0;border-radius:50%;background:transparent;font-size:.8rem;opacity:.3}
+.altrow:hover .cut-btn,.cut-btn:focus-visible{opacity:.8}
+.altrow.cut .cut-btn{opacity:1;background:var(--raise-2)}
+.fb{margin:16px 0 0;padding:11px 14px;border-radius:10px;font-size:.92rem;font-weight:500;background:var(--raise)}
+.q.ok .fb{background:var(--ok-bg);color:#9be3c6}
+.q.err .fb{background:var(--err-bg);color:#f6b4b4}
+#corrigir{display:block;width:100%;padding:14px;margin:8px 0 0;font-size:.95rem}
+
+/* tabelas */
+.tblwrap{overflow-x:auto;margin:16px 0;border:1px solid var(--line);border-radius:var(--r-m);-webkit-overflow-scrolling:touch}
+.qtab{border-collapse:collapse;width:100%;min-width:300px;font-family:var(--sans);font-size:.9rem;line-height:1.45;font-variant-numeric:tabular-nums}
+.qtab th,.qtab td{padding:9px 14px;text-align:left;border-bottom:1px solid var(--line)}
+.qtab th{font-size:.82rem;font-weight:600;color:var(--head);background:var(--raise-2)}
+.qtab td.n,.qtab th.n{text-align:right;white-space:nowrap}
+.qtab tr.sec td{font-weight:600;color:var(--acc);background:var(--raise)}
+.qtab tr:last-child td{border-bottom:0}
+
+/* professor (IA) */
+.iabox{margin-top:18px;overflow:hidden;border-color:rgba(114,184,200,.22);background:rgba(10,18,32,.72)}
+.iahead{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 16px;border-bottom:1px solid var(--line)}
+.iatitle{display:flex;align-items:center;gap:12px}
+.iaav{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;font-size:1rem;background:var(--acc-bg);border:1px solid rgba(114,184,200,.3)}
+.iatitle b{font-size:.92rem;color:var(--head)}
+.iatitle small{display:block;font-size:.74rem}
+.iabtns{display:flex;gap:4px;flex-wrap:wrap}
+.iahead button{padding:4px 10px;font-size:.8rem}
+.iabody{white-space:pre-wrap;max-height:58vh;overflow:auto;margin:10px 0;line-height:1.6;-webkit-overflow-scrolling:touch}
+.iabody h4{margin:12px 0 4px}
+.iabox .iabody{max-height:none;overflow:visible;margin:0;padding:8px 18px 20px;white-space:normal}
+.isec{margin:12px 0;padding:14px 16px;border-radius:10px;background:var(--raise);border-left:2px solid var(--line-2)}
+.isec h4{margin:0 0 8px;font-size:.95rem}
+.isb{white-space:pre-wrap;line-height:1.75;color:var(--txt-2);overflow-wrap:anywhere}
+.isec.ok{border-left-color:var(--ok)}
+.isec.info{border-left-color:var(--acc)}
+.isec.law{border-left-color:var(--lav)}
+.isec.warn{border-left-color:var(--warn);background:var(--warn-bg)}
+.isec.warn h4{color:#f0cd8e}
+.inc{display:flex;align-items:center;gap:12px;margin:0 0 10px;font-size:.84rem}
+.mt{display:inline-flex;gap:4px}
+.mt i{width:24px;height:5px;border-radius:3px;background:rgba(148,163,184,.18)}
+.inc.l1 i:nth-child(-n+1){background:var(--ok)}
+.inc.l2 i:nth-child(-n+2){background:var(--acc)}
+.inc.l3 i:nth-child(-n+3){background:var(--warn)}
+.inc.l4 i:nth-child(-n+4){background:var(--err)}
+
+/* ---------- conteúdo ---------- */
+.secblock{margin:0 0 44px}
+.sechead{display:flex;align-items:baseline;gap:10px;margin:0 0 16px;padding-bottom:12px;border-bottom:1px solid var(--line)}
+.sechead b{font-size:1.02rem;color:var(--head)}
+.mgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
+.mcard{padding:18px;border-radius:var(--r-m)}
+.mtop{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.mdot{flex:0 0 34px;height:34px;border-radius:9px;display:grid;place-items:center;font-size:.9rem;font-weight:600;
+  background:hsl(var(--h) 30% 20% / .7);color:hsl(var(--h) 60% 82%);border:1px solid hsl(var(--h) 30% 42% / .35)}
+.mcard .mnome{flex:1;min-width:0;padding:6px 2px;font-weight:600;border:0;border-bottom:1px solid transparent;border-radius:0;background:transparent}
+.mcard .mnome:focus{box-shadow:none;border-bottom-color:var(--acc-2)}
+.ico{padding:6px 7px;border:0;background:transparent;opacity:.55}
+@media(hover:hover){.ico:hover{opacity:1;background:var(--raise)}}
+.mfields{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px}
+.fld label{display:block;margin-bottom:6px;font-size:.76rem;color:var(--mut)}
+.fld input{width:100%}
+.addsec{width:100%;margin-top:14px;padding:12px;border:1px dashed var(--line-2);border-radius:var(--r-m);background:transparent;color:var(--mut)}
+
+/* ---------- cronograma ---------- */
+.kbar{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin:0 0 24px;padding-bottom:16px;border-bottom:1px solid var(--line)}
+.tabs{display:flex;gap:6px;flex-wrap:wrap}
+.kbar .tabs{flex:1 1 220px;flex-wrap:nowrap;overflow-x:auto;padding-bottom:2px}
+.tab{white-space:nowrap;padding:7px 14px;border-radius:99px;font-size:.86rem}
+.tab.add{border-style:dashed;background:transparent}
+.kact{display:flex;gap:6px}
+.kgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px}
+.kdia{border-radius:var(--r-m);overflow:hidden}
+.khead{display:flex;align-items:center;gap:10px;padding:16px 16px 10px}
+.khead b{flex:1;color:var(--head)}
+.kico{display:none}
+.kcount{font-size:.76rem;color:var(--mut)}
+.tag{padding:2px 8px;border-radius:99px;font-size:.7rem;font-weight:600;color:#071318;background:var(--acc)}
+.kdia.hoje{border-color:rgba(114,184,200,.5);box-shadow:0 0 0 1px rgba(114,184,200,.2)}
+.kdia.descanso{background:transparent;border-style:dashed;-webkit-backdrop-filter:none;backdrop-filter:none}
+.kbody{padding:0 16px 16px}
+.kbody .chips{gap:6px;margin-bottom:0}
+.kbody .muted{margin:0;font-size:.86rem}
+.pill{display:inline-flex;align-items:center;gap:2px;padding:4px 4px 4px 11px;border-radius:99px;font-size:.84rem;
+  background:hsl(var(--h) 30% 20% / .55);border:1px solid hsl(var(--h) 30% 45% / .3);color:hsl(var(--h) 55% 86%)}
+.pill button{padding:2px 6px;border:0;background:none;color:inherit;font-size:.72rem;opacity:.6}
+.kdia select{width:100%;margin-top:12px;padding:9px;border:1px dashed var(--line-2);background:transparent;color:var(--mut);font-size:.86rem}
+
+/* ---------- diagnóstico ---------- */
+.dintro{max-width:70ch;margin:-16px 0 28px}
+.dtiles{margin:0 0 24px}
+.foco{margin:0 0 32px;padding:20px 22px;border-radius:var(--r-m);border:1px solid rgba(226,180,100,.3);background:var(--warn-bg)}
+.foco.ok{border-color:rgba(92,196,159,.3);background:var(--ok-bg)}
+.foco.nd{border-color:var(--line);background:var(--raise)}
+.focoitem{margin-top:12px;padding:10px 14px;border-left:2px solid var(--warn);border-radius:0 8px 8px 0;background:rgba(9,13,22,.35);font-size:.9rem;line-height:1.6}
+.focoitem.alto{border-left-color:var(--err)}
+.dlist{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
+.dlist.big{grid-template-columns:repeat(auto-fill,minmax(min(100%,340px),1fr))}
+.drow{padding:20px;border-radius:var(--r-m)}
+.drow.alto{box-shadow:inset 0 2px 0 var(--err)}
+.drow.med{box-shadow:inset 0 2px 0 var(--warn)}
+.drow.ok{box-shadow:inset 0 2px 0 var(--ok)}
+.dtop{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center}
+.dtop b{color:var(--head)}
+.nvb{font-size:.76rem;color:var(--mut)}
+.dpctrow{display:flex;align-items:center;gap:14px;margin:14px 0 8px}
+.dpct{min-width:62px;font-size:1.6rem;font-weight:600;color:var(--head);font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.dpctrow .bar{flex:1;margin:0}
+.dap{margin-top:8px;font-size:.84rem;color:var(--txt-2)}
+.lrows{margin-top:16px;padding-top:12px;border-top:1px solid var(--line)}
+.lt{font-size:.78rem;font-weight:500;color:var(--mut)}
+.lrow{margin-top:12px}
+.lrow .bar{margin-top:6px}
+.ltop{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.ln{font-size:.86rem;font-weight:500;overflow-wrap:anywhere}
+.lp{font-weight:600;font-variant-numeric:tabular-nums}
+.lsub{margin-top:6px;font-size:.76rem}
+
+/* ---------- diálogos ---------- */
+dialog{width:min(92vw,400px);padding:24px;color:var(--txt);background:var(--glass-2);-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px);
+  border:1px solid var(--line-2);border-radius:var(--r-l);box-shadow:0 30px 80px -20px rgba(0,0,0,.85)}
+dialog::backdrop{background:rgba(5,8,15,.6);-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}
+dialog[open]{animation:pop .22s var(--ease)}
+dialog h3{margin:0 0 16px;font-size:1.1rem}
+dialog input,dialog select{width:100%;margin-bottom:10px}
+dialog .muted{font-size:.82rem;line-height:1.5}
+.dgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.dbtns{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}
+
+/* leitor de apostilas */
+dialog.leitor[open]{display:flex;flex-direction:column;width:min(96vw,860px);max-height:92vh;padding:20px 24px}
+.lhead{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center;padding-bottom:14px;border-bottom:1px solid var(--line)}
+#lTitulo{color:var(--head)}
+.lnav{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.lnav button{padding:7px 11px}
+#lPag{width:70px;margin:0;padding:7px 9px}
+#lQtd{margin:0;padding:7px 9px}
+.lcorpo{overflow-y:auto;flex:1;min-height:0;padding:20px 8px 8px;font-family:var(--serif);font-size:1.06rem;line-height:1.8;-webkit-overflow-scrolling:touch}
+.lcorpo>*:not(.tblwrap){max-width:68ch}
+.lcorpo h3,.gemhtml h3{margin:26px 0 8px;font-family:var(--serif);font-size:1.18rem}
+.lcorpo p{margin:0 0 12px;color:#e2e8f0}
+.lcorpo p.li{padding-left:16px}
+.lcorpo .muted{font-family:var(--sans)}
+.gemhtml h4{margin:18px 0 6px}
+.gemhtml p,.gemhtml li{color:#e2e8f0;line-height:1.8}
+.gemhtml ul,.gemhtml ol{padding-left:22px}
+.gemhtml blockquote{margin:14px 0;padding:10px 16px;border-left:2px solid var(--acc);border-radius:0 8px 8px 0;background:var(--raise)}
+.rawtxt{white-space:pre-wrap;max-height:240px;overflow:auto;margin-top:10px;padding:12px;border-radius:10px;font-size:.78rem;background:rgba(0,0,0,.3)}
+
+/* aviso flutuante */
+.toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:60;max-width:90vw;padding:11px 18px;
+  border-radius:12px;font-size:.88rem;color:var(--txt);background:rgba(15,23,42,.95);border:1px solid var(--line-2);
+  -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);box-shadow:0 16px 40px -12px rgba(0,0,0,.8);animation:toastin .22s var(--ease)}
+
+@keyframes fade{from{opacity:0}}
+@keyframes pop{from{opacity:0;transform:translateY(8px) scale(.98)}}
+@keyframes toastin{from{opacity:0;transform:translate(-50%,8px)}}
+
+/* ---------- menu recolhido (desktop) ---------- */
+@media(min-width:721px){
+  #app.col #side{flex-basis:76px;width:76px;align-items:center;padding-left:12px;padding-right:12px}
+  #app.col .lb,#app.col .ptxt,#app.col .bt,#app.col .matbox{display:none}
+  #app.col #menu{align-self:stretch}
+  #app.col .mi{justify-content:center;padding:11px 0}
+  #app.col .mi.on::before{left:-12px}
+  #app.col .perfil{align-items:center;padding:8px 4px;background:transparent;border-color:transparent}
+  #app.col #colapsar svg{transform:rotate(180deg)}
+}
+@media(max-width:1100px){.conteudo{padding:36px 32px 64px}}
+
+/* ---------- celular ---------- */
+@media(max-width:720px){
+  #app{flex-direction:column}
+  #side{display:contents}
+  .sbrand{order:0;padding:16px 18px 4px}
+  .perfil{order:1;flex-direction:row;align-items:center;justify-content:space-between;margin:10px 14px 0;padding:10px 12px}
+  #colapsar,.matbox{display:none}
+  .conteudo{order:2;padding:24px 16px calc(112px + env(safe-area-inset-bottom))}
+  #menu{position:fixed;left:12px;right:12px;bottom:calc(10px + env(safe-area-inset-bottom));z-index:40;flex-direction:row;gap:4px;padding:6px;
+    border-radius:18px;background:rgba(15,23,42,.84);-webkit-backdrop-filter:blur(18px) saturate(1.3);backdrop-filter:blur(18px) saturate(1.3);
+    border:1px solid var(--line-2);box-shadow:0 18px 40px -12px rgba(0,0,0,.85)}
+  .mi{flex:1;flex-direction:column;justify-content:center;gap:4px;padding:8px 4px;font-size:.68rem;text-align:center;border-radius:12px}
+  .mi.on::before{display:none}
+  .mobonly{display:inline-flex}
+  input:not([type=checkbox]):not([type=radio]),select{font-size:16px}
+  .ctop,.phead{margin-bottom:24px}
+  .card{padding:18px}
+  .card.q{padding:22px 18px 18px}
+  .enun{font-size:1.06rem}
+  .retomar{grid-template-columns:1fr;padding:20px 20px 26px;margin-bottom:32px}
+  .rt-btn{width:100%}
+  .center{margin-left:16px;margin-right:16px;padding:32px 22px 26px}
+}
+@media(hover:hover){.mi:not(.on):hover,.mitem:not(.on):hover{color:var(--txt);background:var(--raise)}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important}}
+
+/* ===== NÚCLEO DE ESTUDOS · REFORMULAÇÃO ACADÊMICA ===== */
+:root{--paper:#f7f9fc;--paper2:#fff;--ink:#172033;--ink2:#526078;--navy:#172b4d;--blue:#2d5b9f;--blue2:#eaf1fb;--gold:#b1842d;--line:#dfe5ee;--shadow:0 10px 30px rgba(20,36,65,.07);--r:16px}
+body{background:linear-gradient(180deg,#f7f9fc 0%,#fff 42%,#f7f9fc 100%);color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+body:before{content:"";position:fixed;inset:0;pointer-events:none;background:radial-gradient(circle at 80% 0%,rgba(45,91,159,.06),transparent 32%),radial-gradient(circle at 0% 40%,rgba(177,132,45,.035),transparent 28%)}
+#side{background:#fff;border-right:1px solid var(--line);box-shadow:8px 0 30px rgba(20,36,65,.035);padding:22px 14px}
+.sbrand{height:58px;padding:0 12px;margin-bottom:18px}.sbrand .logo,.lbrand .logo{display:grid;place-items:center;width:40px;height:40px;border-radius:12px;background:var(--navy);color:#fff;font-size:21px;box-shadow:0 5px 14px rgba(23,43,77,.18)}
+.sbrand .bt{color:var(--navy);font-weight:800;letter-spacing:-.02em}.sbrand small{display:block;color:#8791a3;font-weight:500;letter-spacing:.01em}
+.mi{border-radius:12px;margin:4px 0;padding:11px 12px;color:#66728a}.mi.on{background:var(--navy);color:#fff;box-shadow:0 6px 16px rgba(23,43,77,.14)}
+.matbox{margin-top:18px;padding:14px;border:1px solid var(--line);border-radius:14px;background:#fbfcfe}.mathead{color:var(--navy);font-weight:700}.matlist .mitem{border-radius:9px}
+.conteudo{padding:34px clamp(22px,4vw,64px) 60px;max-width:1500px;margin:0 auto}
+.ctop,.phead{padding-bottom:18px;border-bottom:1px solid var(--line);margin-bottom:26px}.ctop h2{font-size:1.65rem;letter-spacing:-.035em;color:var(--navy);margin-bottom:5px}.ctop .muted{max-width:72ch}
+.card,.mcard,.drow,.retomar,.kdia,.foco,.iabox{background:#fff;border:1px solid var(--line);box-shadow:var(--shadow);border-radius:var(--r)}
+.card{box-shadow:0 5px 20px rgba(20,36,65,.045)}.mcard{transition:transform .16s,box-shadow .16s}.mcard:hover{transform:translateY(-2px);box-shadow:0 14px 30px rgba(20,36,65,.08)}
+.mgrid{gap:18px}.sechead{border-bottom:1px solid var(--line);padding-bottom:12px}.sechead b{color:var(--navy)}
+.addsec,.addbig{border-radius:12px!important}.addsec{background:#fff}.addbig,.pri{background:var(--navy)!important;border-color:var(--navy)!important;color:#fff!important;box-shadow:0 6px 15px rgba(23,43,77,.12)}
+button{font-family:inherit}input,select,textarea{background:#fff!important;border-color:#d7deea!important;color:var(--ink)!important;border-radius:10px!important}input:focus,select:focus,textarea:focus{border-color:#7d9dca!important;box-shadow:0 0 0 3px rgba(45,91,159,.10)!important}
+.perfil{background:#f7f9fc!important;border:1px solid var(--line);border-radius:14px!important}.pinfo{color:var(--ink)}#avatar{background:var(--blue2)!important;color:var(--navy)!important}
+.center{background:#fff;border:1px solid var(--line);box-shadow:0 20px 60px rgba(20,36,65,.08);border-radius:22px}.lbrand{color:var(--navy);font-weight:800}
+/* dashboard */
+.homegrid{display:grid;grid-template-columns:1.5fr .8fr;gap:20px}.homehero{padding:30px;border-radius:20px;background:linear-gradient(135deg,#172b4d,#2d5b9f);color:#fff;box-shadow:0 18px 42px rgba(23,43,77,.18)}.homehero h1{font-size:2.15rem;letter-spacing:-.05em;margin:0 0 8px}.homehero p{color:rgba(255,255,255,.78);max-width:62ch}.homeeyebrow{font-size:.75rem;text-transform:uppercase;letter-spacing:.13em;color:#dce7f7;font-weight:800}.homecards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:18px}.homecard{padding:19px;border:1px solid var(--line);background:#fff;border-radius:16px;box-shadow:var(--shadow)}.homecard b{display:block;color:var(--navy);margin:8px 0 4px}.homeicon{width:36px;height:36px;display:grid;place-items:center;border-radius:10px;background:var(--blue2);font-size:18px}.homeactions{display:grid;gap:10px}.homeaction{display:flex;gap:12px;align-items:center;padding:14px;border:1px solid var(--line);border-radius:14px;background:#fff;text-align:left}.homeaction:hover{border-color:#b9c9df;background:#fbfdff}.homeaction strong{display:block;color:var(--navy)}.homeaction small{color:var(--ink2)}
+/* revision */
+.revhead{display:flex;justify-content:space-between;gap:20px;align-items:flex-end;margin-bottom:22px}.revtitle{color:var(--navy);font-size:1.7rem;letter-spacing:-.035em}.revbadge{display:inline-flex;align-items:center;gap:7px;padding:6px 10px;border-radius:999px;background:var(--blue2);color:var(--blue);font-size:.75rem;font-weight:800}.revcontrols{display:grid;grid-template-columns:1.4fr 1fr auto;gap:12px;padding:18px;background:#fff;border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);margin-bottom:18px}.revlayout{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:18px}.revpanel{background:#fff;border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow);padding:22px}.revpanel h3{color:var(--navy);margin:0 0 8px}.revsection{margin-top:18px;padding-top:18px;border-top:1px solid var(--line)}.revsection h4{color:var(--navy);margin:0 0 8px}.revsection.warn{border-left:4px solid #c7902f;padding-left:14px}.revquestion{padding:18px;border:1px solid var(--line);border-radius:14px;margin-top:12px;background:#fcfdff}.revquestion.real{border-left:4px solid #2d5b9f}.revquestion.ai{border-left:4px solid #b1842d}.qtag{display:inline-flex;padding:4px 8px;border-radius:999px;font-size:.7rem;font-weight:800;background:#edf2f8;color:#51627d}.qtag.ai{background:#fbf3df;color:#8c681f}.revside{display:grid;gap:14px;align-content:start}.statbox{padding:17px;border:1px solid var(--line);border-radius:14px;background:#fff}.statbox .num{font-size:1.65rem;font-weight:800;color:var(--navy)}.errorlist{display:grid;gap:8px}.erroritem{padding:10px 12px;background:#fff6f4;border-left:3px solid #c75b4b;border-radius:8px;color:#6c3c35;font-size:.86rem}.revempty{padding:35px;text-align:center;color:var(--ink2)}.revloading{padding:30px;text-align:center;color:var(--ink2)}
+/* hide legacy cronograma UI but preserve stored data */
+#secCronograma{display:none!important}.mi[data-sec="cronograma"]{display:none!important}
+@media(max-width:900px){.homegrid,.revlayout{grid-template-columns:1fr}.homecards{grid-template-columns:1fr}.revcontrols{grid-template-columns:1fr}.conteudo{padding:24px 16px 45px}.revhead{align-items:flex-start;flex-direction:column}}
+@media(max-width:620px){#side{padding:10px 8px}.sbrand{padding:0 6px}.conteudo{padding:18px 12px 38px}.homehero{padding:22px}.homehero h1{font-size:1.75rem}.homecards{gap:10px}.revpanel{padding:16px}.revtitle{font-size:1.4rem}}
+
+
+/* ===== Melhorias 1,2,4,6,7,8 ===== */
+.recommendation{margin:18px 0;padding:14px 16px;border:1px solid rgba(255,255,255,.18);border-radius:14px;background:rgba(255,255,255,.08);display:grid;gap:3px}.recommendation b{font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:#dce7f7}.recommendation strong{font-size:1.05rem}.recommendation span{font-size:.86rem;color:rgba(255,255,255,.72)}
+.notebook{padding:16px;display:grid;gap:12px}.errorcard{border:1px solid var(--line);border-left:4px solid #c75b4b;border-radius:14px;padding:15px;background:#fff}.errorcard.done{border-left-color:#5a9a7a;opacity:.82}.errorcardhead{display:flex;justify-content:space-between;gap:12px;align-items:center}.errorenun{font-family:var(--serif);color:var(--ink);line-height:1.6}.erranswers{display:flex;gap:18px;flex-wrap:wrap;font-size:.9rem}.errorcard textarea{width:100%;min-height:72px;margin:12px 0 8px;resize:vertical}.small{padding:8px 11px!important;font-size:.85rem!important}
+@media(max-width:620px){.q .qhead{position:sticky;top:0;z-index:3;background:#fff;padding:10px 0;border-bottom:1px solid var(--line)}.q .qbtns{display:flex;gap:6px}.q .ia-btn{min-height:42px}.altrow{display:grid;grid-template-columns:minmax(0,1fr) 42px;gap:6px;margin:7px 0}.alt{min-height:48px;padding:11px 10px;align-items:flex-start}.alt input{width:20px;height:20px;margin-top:1px}.cut-btn{min-height:42px}.filtros{position:sticky;top:0;z-index:4;background:#f7f9fc;padding:8px 0}.filtros .chips{overflow-x:auto;flex-wrap:nowrap;padding-bottom:4px}.filtros .chip{white-space:nowrap}.q{scroll-margin-top:70px}.q + .q{margin-top:12px}#corrigir{position:sticky;bottom:10px;z-index:8;width:100%;min-height:50px;border-radius:14px;box-shadow:0 10px 30px rgba(20,36,65,.18)}.errorcardhead{align-items:flex-start;flex-direction:column}.homehero .pri{width:100%;min-height:48px}}
+</style>
+</head>
+<body>
+<section id="login" class="center"><div class="lbrand"><span class="logo">▱</span><span>Núcleo de Estudos</span></div>
+  <h2>Entrar</h2><p class="muted lsubt">Questões, conteúdo e revisões sincronizados em todos os seus aparelhos.</p>
+  <form id="formLogin">
+    <input type="email" id="email" placeholder="E-mail" autocomplete="username" required>
+    <input type="password" id="senha" placeholder="Senha (mín. 6 caracteres)" autocomplete="current-password" minlength="6" required>
+    <label class="lembrar"><input type="checkbox" id="lembrar" checked> Lembrar de mim neste aparelho</label>
+    <button class="pri" id="btnEntrar">Entrar</button>
+    <button type="button" id="btnCriar">Criar conta</button>
+    <button type="button" id="btnReset" class="link">Esqueci minha senha</button>
+    <p id="erroLogin" class="erro"></p>
+  </form></section>
+<div id="app" hidden>
+  <aside id="side">
+    <div class="sbrand"><span class="logo">▱</span><span class="bt">Núcleo<small>de Estudos</small></span></div>
+    <div id="conta" class="perfil" hidden>
+      <div class="pinfo"><span id="avatar">?</span><span class="ptxt"><b id="usuario"></b><small id="statusCiclo">Carregando ciclo…</small></span></div>
+      <button id="sair" title="Sair"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg><span class="lb">Sair</span></button>
+    </div>
+    <nav id="menu">
+      <button class="mi on" data-sec="inicio" title="Início"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10.5V20h14v-9.5"/><path d="M9 20v-5h6v5"/></svg><span class="lb">Início</span></button>
+      <button class="mi" data-sec="questoes" title="Questões"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h9"/></svg><span class="lb">Questões</span></button><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h9"/></svg><span class="lb">Questões</span></button>
+      <button class="mi" data-sec="diagnostico" title="Diagnóstico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg><span class="lb">Diagnóstico</span></button><button class="mi" data-sec="caderno" title="Caderno de erros"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h12v16H6z"/><path d="M9 8h6M9 12h6M9 16h4"/></svg><span class="lb">Caderno de erros</span></button>
+      <button class="mi" data-sec="conteudo" title="Conteúdo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"/><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"/></svg><span class="lb">Conteúdo</span></button>
+      <button class="mi" data-sec="revisao" title="Revisão"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h6"/><path d="M16 16l2 2 3-3"/></svg><span class="lb">Revisão</span></button>
+    </nav>
+    <div class="matbox">
+      <div class="mathead"><span>Matérias</span><button id="novaMat" data-novamat="1" title="Nova matéria">＋</button></div>
+      <input id="buscaMat" placeholder="Buscar matéria…" autocomplete="off">
+      <div id="listaMaterias" class="matlist"></div>
+    </div>
+    <button id="colapsar" title="Recolher / expandir menu"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/></svg><span class="lb">Recolher</span></button>
+  </aside>
+  <div class="conteudo">
+    <section id="secInicio"><div id="painelInicio"></div></section>
+    <section id="secQuestoes" hidden><div id="painel"></div></section>
+    <section id="secDiagnostico" hidden></section>
+    <section id="secCaderno" hidden></section>
+    <section id="secConteudo" hidden></section>
+    <section id="secRevisao" hidden></section>
+    <section id="secCronograma" hidden></section>
+  </div>
+</div>
+<dialog id="dlgMateria"><form id="formDlg" method="dialog">
+  <h3>Nova matéria</h3>
+  <input id="dNome" placeholder="Nome da matéria" required>
+  <select id="dSec"><option value="regular">📘 PDF Regular</option><option value="passe">⭐ Passe Estratégico</option></select>
+  <div class="dgrid"><input id="dMat" placeholder="Apostila / Aula"><input id="dDet" placeholder="Página / exercício"></div>
+  <div class="dbtns"><button type="button" id="dCancel">Cancelar</button><button class="pri">Adicionar</button></div>
+</form></dialog>
+<dialog id="dlgCfg"><form id="formCfg" method="dialog">
+  <h3>IA dentro do app</h3>
+  <select id="cProv"><option value="gemini">Google Gemini</option><option value="openai">OpenAI (ChatGPT)</option><option value="anthropic">Anthropic (Claude)</option></select>
+  <input id="cModel" placeholder="Modelo (opcional) — o servidor escolhe um padrão seguro">
+  <p class="muted"><b>IA protegida:</b> a chave do provedor fica no servidor e nunca é enviada ao navegador. O app usa o endpoint seguro <code>/api/ai</code>.</p>
+  <div class="dbtns"><button type="button" id="cCancel">Cancelar</button><button class="pri">Salvar</button></div>
+</form></dialog>
+<dialog id="dlgMaterias"><div class="row-head"><h3 style="margin:0">Matérias</h3><button type="button" id="dmFechar">✕</button></div>
+  <input id="buscaMat2" placeholder="Buscar matéria…" autocomplete="off" style="margin-top:10px">
+  <div id="listaMaterias2" class="matlist"></div>
+  <button class="pri" data-novamat="1" style="width:100%;margin-top:12px">Nova matéria</button></dialog>
+<input type="file" id="apFile" accept="application/pdf" hidden>
+<dialog id="dlgLeitor" class="leitor">
+  <div class="lhead"><b id="lTitulo"></b>
+    <span class="lnav"><button type="button" id="lPrev">‹</button><input id="lPag" type="number" min="1"><span id="lTotal" class="muted"></span><button type="button" id="lNext">›</button><select id="lQtd"><option value="1">1 pág.</option><option value="3" selected>3 págs.</option><option value="5">5 págs.</option></select><button type="button" id="lIA" class="pri">Ler com Gemini</button><button type="button" id="lFechar">✕</button></span></div>
+  <div id="lCorpo" class="lcorpo"></div>
+</dialog>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, setPersistence, browserLocalPersistence, browserSessionPersistence, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, addDoc, updateDoc, deleteDoc, deleteField, writeBatch, onSnapshot, setDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyA9k7aqcBb2dVMVMA6zp0PAN6rLvADReaI",
+  authDomain: "questoes-b0c0b.firebaseapp.com",
+  projectId: "questoes-b0c0b",
+  storageBucket: "questoes-b0c0b.firebasestorage.app",
+  messagingSenderId: "194950212696",
+  appId: "1:194950212696:web:b4b59dbf93460088056e2d",
+  measurementId: "G-8H53FTS93Y"
+};
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+// Cache offline: continua funcionando sem internet e sincroniza depois
+const fs = initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) });
+
+// ---------- Leitor de PDF (PDF.js via CDN, com CDN de reserva) ----------
+let pdfWorker = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+let statusImport = "", ultimoTexto = "", ultimaLeitura = {};
+const carregarScript = (src) => new Promise((ok, no) => {
+  const sc = document.createElement("script"); sc.src = src; sc.onload = ok; sc.onerror = () => no(new Error("Falha ao carregar " + src));
+  document.head.appendChild(sc);
+});
+async function garantirPdfjs() { // se o CDN do <head> falhar, tenta o jsDelivr antes de desistir
+  if (!window.pdfjsLib) {
+    try {
+      await carregarScript("https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js");
+      pdfWorker = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
+    } catch (e) { /* tratado abaixo */ }
+  }
+  if (!window.pdfjsLib) throw new Error("Não foi possível carregar o leitor de PDF (PDF.js). Verifique a internet ou bloqueadores de conteúdo.");
+  pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
+}
+const $ = (id) => document.getElementById(id);
+const esc = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// ---------- Estado ----------
+let user = null, materias = [], listas = [], unsubs = [];
+const ui0 = JSON.parse(localStorage.getItem("ui_estudos") || "{}"); // preferências de tela (por aparelho)
+let sel = { materia: ui0.materia || null, lista: ui0.lista || null };
+let filtro = ui0.filtro || "todas";
+let secao = ui0.secao || "questoes", subC = "regular";
+let faixa = ui0.faixa || { de: 1, ate: 9999 };
+const saveUi = () => localStorage.setItem("ui_estudos", JSON.stringify({ ...sel, filtro, faixa, secao }));
+const col = (n) => collection(fs, "users", user.uid, n);
+const ref = (n, id) => doc(fs, "users", user.uid, n, id);
+const falha = (err) => { console.error(err); alert("Erro ao salvar na nuvem: " + err.message); };
+// Ordem alfabética natural (Aula 2 antes de Aula 10, ignora acentos/maiúsculas)
+const alfa = (a, b) => a.nome.localeCompare(b.nome, "pt-BR", { numeric: true, sensitivity: "base" });
+const listaAtual = () => listas.find((l) => l.id === sel.lista);
+const statTxt = (l) => { // ex.: "12/87 resp. • 75%"
+  const c = contar(l, l.questoes), tot = l.questoes.length, cor = c.acerto + c.erro;
+  return `${tot - c.branco}/${tot} resp. • ${cor ? Math.round((c.acerto / cor) * 100) + "%" : "—"}`;
+};
+const atualizarLinha = (L) => { const e = document.querySelector(`[data-stat="${L.id}"]`); if (e) e.textContent = statTxt(L); };
+let exibidas = []; // números das questões que estão na tela agora
+const pendentesTela = (L) => L.questoes.filter((q) => exibidas.includes(q.num) && status(L, q) === "pendente");
+// Atualiza o botão inferior em tempo real (contador e habilitação)
+function atualizarBotao(L) {
+  const b = $("corrigir"); if (!b) return;
+  const n = pendentesTela(L).length;
+  b.textContent = `Corrigir questões marcadas (${n})`;
+  b.disabled = !(n && Object.keys(L.gabarito).length);
+}
+const sig = (ls) => ls.map((L) => [L.id, L.nome, L.materia, L.questoes.length,
+  Object.entries(L.respostas || {}).sort().join(), Object.keys(L.corrigidas || {}).sort().join(), Object.entries(L.riscadas || {}).sort().join(), Object.keys(L.ia || {}).sort().join()].join("~")).join("|");
+
+// ---------- Leitura de PDF / questões / relatório (reaproveitados) ----------
+// ---------- Extração do PDF ----------
+const LIXO = new RegExp([
+  "www\\.", "https?:", "t\\.me", "telegram", "estrat[eé]gia\\s+concursos",
+  "p[aá]gina\\s+\\d+", "^\\s*\\d+\\s*(de|/)\\s*\\d+\\s*$",   // numeração de páginas
+  ",\\s*equipe\\s", "^\\s*aula\\s+\\d+",                       // "Fulano, Equipe Direito X  Aula 07 ..."
+  "direitos?\\s+autorais?", "proibida\\s+a\\s+reprodu", "9\\.610", "licenciado",
+  "\\bcpf\\b", "\\d{3}\\.?\\d{3}\\.?\\d{3}-?\\d{2}", "^\\s*prof\\."
+].join("|"), "i");
+const chaveLinha = (l) => l.toLowerCase().replace(/\d+/g, "#").replace(/\s+/g, " ").trim();
+
+// Limpeza final do texto (links, assinatura de rodapé, "Página N") — também aplicada ao exibir
+function limpar(t) {
+  return t
+    .replace(/https?:\/\/\S+|t\.me\/\S+|www\.\S+/gi, " ")
+    .replace(/[A-ZÀ-Ú][\wÀ-ú.]+(?:\s[A-ZÀ-Ú][\wÀ-ú.]+){0,1},\s*Equipe\s[\wÀ-ú ]{3,60}?\sAula\s\d+(?:\s[A-ZÀ-Ú0-9\-.()\/]{2,}){0,3}/g, " ")
+    .replace(/\bP[aá]gina\s+\d+(\s+de\s+\d+)?/gi, " ")
+    .replace(/\s{2,}/g, " ").trim();
+}
+// Gabarito: "1. C", "2 - A", "3: Certo", "4) ANULADA"...
+const PAD_GAB = /(?<!\d)(\d{1,3})\s*[.\-–:)]?\s*(ANULAD[AO]|CERTO|ERRADO|[A-E])(?![A-Za-zÀ-ú])/g;
+
+// Lê uma página: agrupa por linha (posição vertical), ordena da esquerda p/ a direita e marca colunas com \t
+async function linhasDaPagina(pg) {
+  const H = (pg.view && pg.view[3]) || 800, tc = await pg.getTextContent();
+  const its = tc.items.filter((it) => it.transform).map((it) => ({ s: it.str, x: it.transform[4], y: it.transform[5], w: it.width || 0, h: it.height || 10 }));
+  its.sort((a, b) => b.y - a.y);
+  const grupos = [];
+  for (const it of its) {
+    const g = grupos[grupos.length - 1];
+    if (g && Math.abs(it.y - g.y) <= 3) g.its.push(it); else grupos.push({ y: it.y, its: [it] });
+  }
+  return grupos.map((g) => {
+    g.its.sort((a, b) => a.x - b.x);
+    let linha = "", fim = null;
+    for (const it of g.its) {
+      if (fim !== null && it.s.trim() && it.x - fim > Math.max(10, it.h * 1.5)) linha += "\t"; // grande vão = nova coluna
+      linha += it.s; fim = it.x + it.w;
+    }
+    return { t: linha.trim(), z: g.y > H * 0.88 || g.y < H * 0.12 }; // z = linha na margem (cabeçalho/rodapé)
+  }).filter((l) => l.t);
+}
+
+async function extrairTexto(file) {
+  await garantirPdfjs();
+  const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+  ultimaLeitura = { paginas: pdf.numPages };
+  const paginas = [];
+  for (let p = 1; p <= pdf.numPages; p++) paginas.push(await linhasDaPagina(await pdf.getPage(p)));
+  // Rodapés/cabeçalhos/marcas d'água se repetem nas MARGENS de várias páginas (ignorando números): descarta.
+  // (Linhas do corpo, como linhas repetidas de balanços, nunca são descartadas por repetição.)
+  const cont = new Map();
+  paginas.forEach((ls) => new Set(ls.filter((l) => l.z).map((l) => chaveLinha(l.t))).forEach((k) => cont.set(k, (cont.get(k) || 0) + 1)));
+  const limite = Math.max(3, Math.ceil(paginas.length * 0.3));
+  const lixo = (l) => !/gabarito/i.test(l.t) && (LIXO.test(l.t) || (l.z && chaveLinha(l.t).length >= 8 && cont.get(chaveLinha(l.t)) >= limite));
+  return paginas.map((ls) => ls.filter((l) => !lixo(l)).map((l) => l.t).join("\n")).join("\n");
+}
+
+const norm = (r) => {
+  r = r.toUpperCase();
+  return r === "CERTO" ? "C" : r === "ERRADO" ? "E" : r.startsWith("ANULAD") ? "ANULADA" : r;
+};
+
+function lerGabarito(t) {
+  const g = {};
+  for (const m of t.replace(/\s+/g, " ").matchAll(PAD_GAB)) {
+    const n = +m[1];
+    if (!(n in g)) g[n] = norm(m[2]);
+  }
+  return g;
+}
+
+// Testa cada "GABARITO" e escolhe a ocorrência com maior sequência 1,2,3...
+function extrairGabarito(texto) {
+  let best = { g: {}, pos: texto.length }, bestRun = 0;
+  for (const m of texto.matchAll(/gabarito/gi)) {
+    const g = lerGabarito(texto.slice(m.index + m[0].length));
+    let r = 0;
+    while (r + 1 in g) r++;
+    if (r > bestRun) { bestRun = r; best = { g, pos: m.index }; }
+  }
+  return best;
+}
+
+// Divide por "1.", "2.", ... aceitando só o número esperado na sequência
+function dividirQuestoes(texto) {
+  let ach = [], esp = 1;
+  for (const m of texto.matchAll(/^[ \t]*(?:Quest[aã]o[ \t]+|Q\.?[ \t]*)?(\d{1,3})[ \t]*[.)\-–:](?:[ \t]+(?=\S)|[ \t]*$)/gim)) {
+    const n = +m[1];
+    if (n === 1 && ach.length < 3) { ach = []; esp = 1; } // ignora sumário
+    if (n === esp) { ach.push({ n, ini: m.index, fim: m.index + m[0].length }); esp++; }
+  }
+  return ach.map((a, i) => ({ n: a.n, bloco: texto.slice(a.fim, i + 1 < ach.length ? ach[i + 1].ini : texto.length) }));
+}
+
+// Separa enunciado e alternativas a) b) c) d) e); sem alternativas => Certo/Errado
+// ---------- Tabelas (balanços, DREs...) ----------
+const NUMX = /^[\(\-–]?\s*(?:R\$\s*)?[\d.,]+\s*\)?\s*%?$/;
+function extrairTabelas(bloco) {
+  const linhas = bloco.split("\n"), saida = [], tabelas = [];
+  const cel = (l) => l.split("\t").map((x) => x.trim()).filter(Boolean);
+  const ehAlt = (l) => /^\s*\(?[a-eA-E]\)\s/.test(l);
+  const cand = (l) => l.includes("\t") && cel(l).length >= 2 && !ehAlt(l);
+  let i = 0;
+  while (i < linhas.length) {
+    if (!cand(linhas[i])) { saida.push(linhas[i]); i++; continue; }
+    let j = i; const rows = [];
+    let cab = null; // título curto logo acima (ex.: ATIVO / Balanço Patrimonial) entra como linha de seção
+    const prev = saida[saida.length - 1], pt = prev === undefined ? "" : prev.trim();
+    if (pt && pt.length <= 45 && !prev.includes("\t") && !/^\[\[T\d+\]\]$/.test(pt) && !/[.?!;:,]$/.test(pt) && !ehAlt(prev) && !/^[•●▪■◦\-–—]\s/.test(pt) && !/^\(?\d{1,3}[.)]\s/.test(pt)
+      && (pt.replace(/[^A-ZÀ-Ú]/g, "").length / (pt.replace(/[^A-Za-zÀ-ú]/g, "").length || 1) > 0.6 || pt.split(/\s+/).length <= 4)) { cab = saida.pop(); rows.push([pt]); }
+    while (j < linhas.length) { // linhas com colunas + subtítulos curtos entre elas (ATIVO, PASSIVO...)
+      const l = linhas[j];
+      if (cand(l)) { rows.push(cel(l)); j++; }
+      else if (rows.length && !ehAlt(l) && cel(l).length === 1 && cel(l)[0].length <= 45 && j + 1 < linhas.length && cand(linhas[j + 1]) && !/[.?!;:]$/.test(l.trim())) { rows.push(cel(l)); j++; }
+      else break;
+    }
+    const cells = rows.flat(), nums = cells.filter((x) => NUMX.test(x)).length, fortes = rows.filter((r) => r.length >= 2).length;
+    const ok = fortes >= 2 && (nums / cells.length >= 0.25 || (fortes >= 3 && Math.max(...rows.map((r) => r.length)) <= 5 && cells.reduce((a, x) => a + x.length, 0) / cells.length <= 35));
+    if (ok) { tabelas.push({ linhas: rows.map((c) => ({ c })) }); saida.push(`[[T${tabelas.length - 1}]]`); } // {c:[...]}: o Firestore não aceita arrays aninhados
+    else { if (cab !== null) saida.push(cab); for (let k = i; k < j; k++) saida.push(linhas[k].replace(/\t+/g, " ")); }
+    i = j;
+  }
+  return { texto: saida.join("\n").replace(/\t+/g, " "), tabelas };
+}
+function tabelaHTML(t) {
+  if (!t || !t.linhas || !t.linhas.length) return "";
+  const n = Math.max(...t.linhas.map((l) => l.c.length));
+  return '<div class="tblwrap"><table class="qtab">' + t.linhas.map((l, i) => {
+    let cs = l.c;
+    if (cs.length === 1 && n > 1) return `<tr class="sec"><td colspan="${n}">${esc(cs[0])}</td></tr>`;
+    if (cs.length < n && n > 2) cs = [cs[0], ...Array(n - cs.length).fill(""), ...cs.slice(1)]; // valor na última coluna
+    const cab = i === 0 && !cs.some((x) => NUMX.test(x));
+    return "<tr>" + cs.map((x) => `<${cab ? "th" : "td"} class="${NUMX.test(x) ? "n" : ""}">${esc(x)}</${cab ? "th" : "td"}>`).join("") + "</tr>";
+  }).join("") + "</table></div>";
+}
+const enunciadoHTML = (txt, tabelas) => txt.split(/\[\[T(\d+)\]\]/).map((p, i) => (i % 2 ? tabelaHTML((tabelas || [])[+p]) : p.trim() ? htmlEnunciado(p) : "")).join("");
+const enunciadoTexto = (q) => limpar(q.enunciado).replace(/\[\[T(\d+)\]\]/g, (m, i) => "\n" + (((q.tabelas || [])[+i]) ? q.tabelas[+i].linhas.map((l) => l.c.join(" | ")).join("\n") : "") + "\n");
+
+function parsearQuestao(num, bloco) {
+  const ex = extrairTabelas(bloco);
+  bloco = limpar(ex.texto.trim().replace(/\s*\n\s*/g, " "));
+  const marcas = [...bloco.matchAll(/(?:^|\s)\(?([a-eA-E])\)\s/g)]
+    .map((m) => ({ l: m[1].toUpperCase(), ini: m.index, fim: m.index + m[0].length }));
+  // Última ocorrência de cada letra (as alternativas vêm depois do enunciado); vale a letra, não a posição
+  const ultima = {};
+  marcas.forEach((m) => { ultima[m.l] = m; });
+  const seq = Object.values(ultima).sort((a, b) => a.ini - b.ini); // ordem em que aparecem no texto
+  if (seq.length >= 2) {
+    const bruto = {};
+    seq.forEach((s, k) => { bruto[s.l] = bloco.slice(s.fim, k + 1 < seq.length ? seq[k + 1].ini : bloco.length).trim(); });
+    const alt = {};
+    Object.keys(bruto).sort().forEach((k) => (alt[k] = bruto[k])); // A, B, C, D, E
+    return { num, tipo: "ME", enunciado: bloco.slice(0, seq[0].ini).trim(), alternativas: alt, tabelas: ex.tabelas };
+  }
+  return { num, tipo: "CE", enunciado: bloco, alternativas: { C: "Certo", E: "Errado" }, tabelas: ex.tabelas };
+}
+
+const ROM = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"];
+const FIM_AFIRM = /(?<=[.;!?])\s+(?=(?:Est[aã]o|Est[aá]|Assinale|Marque|Indique|Julgue|Considerando|Com base|Analise|[EÉ] correto|Somente|Apenas|Quais|Qual)\b)/;
+// Detecta I., II., III... (em sequência) no texto corrido e separa em linhas
+function htmlEnunciado(txt) {
+  txt = limpar(txt);
+  const ms = []; let e = 0;
+  for (const m of txt.matchAll(/(?:^|\s)(VIII|VII|VI|IV|IX|III|II|I|V|X)\s*[.)\-–]\s+(?=\S)/g)) {
+    if (m[1] === "I" && e < 2) { ms.length = 0; e = 0; } // reinicia se ainda não fechou I, II
+    if (m[1] === ROM[e]) { ms.push({ r: m[1], ini: m.index, fim: m.index + m[0].length }); e++; }
+  }
+  if (ms.length < 2) return `<p>${esc(txt)}</p>`;
+  const intro = txt.slice(0, ms[0].ini).trim();
+  let resto = "";
+  const itens = ms.map((x, k) => {
+    let t = txt.slice(x.fim, k + 1 < ms.length ? ms[k + 1].ini : txt.length).trim();
+    if (k === ms.length - 1) { const q = t.search(FIM_AFIRM); if (q > 0) { resto = t.slice(q).trim(); t = t.slice(0, q).trim(); } } // "Estão corretas..."
+    return `<li><b>${x.r}.</b> ${esc(t)}</li>`;
+  });
+  return (intro ? `<p>${esc(intro)}</p>` : "") + `<ul class="afirm">${itens.join("")}</ul>` + (resto ? `<p>${esc(resto)}</p>` : "");
+}
+
+async function processarPDF(file) {
+  const texto = await extrairTexto(file);
+  ultimoTexto = texto;
+  if (texto.replace(/\s/g, "").length < 50) throw new Error("o PDF não tem texto selecionável (parece escaneado/imagem) — seria necessário OCR.");
+  const { g, pos } = extrairGabarito(texto);
+  const questoes = dividirQuestoes(texto.slice(0, pos)).map((q) => parsearQuestao(q.n, q.bloco));
+  return { id: Date.now() + Math.random().toString(36).slice(2, 6), nome: file.name.replace(/\.pdf$/i, ""), questoes, gabarito: g, respostas: {}, corrigidas: {}, paginas: ultimaLeitura.paginas };
+}
+
+// ---------- Interface ----------
+const TAM = 20; // tamanho dos blocos (chips e gráfico por bloco)
+const FILTROS = [["todas", "Todas"], ["nao", "Não resolvidas"], ["res", "Resolvidas"], ["erro", "Erradas"]];
+
+// Estado: branco | pendente (marcada, ainda não corrigida) | acerto | erro | anulada
+function status(L, q) {
+  const m = L.respostas?.[q.num], c = L.gabarito?.[q.num];
+  if (!m) return "branco";
+  if (!L.corrigidas?.[q.num]) return "pendente";
+  if (!c || c === "ANULADA") return "anulada";
+  return m === c ? "acerto" : "erro";
+}
+
+// Questões exibidas conforme bloco (de/até) e filtro
+function visiveis(L) {
+  return L.questoes.filter((q) => {
+    if (q.num < faixa.de || q.num > faixa.ate) return false;
+    const s = status(L, q);
+    return filtro === "todas" || (filtro === "nao" && s === "branco") ||
+      (filtro === "res" && s !== "branco") || (filtro === "erro" && s === "erro");
+  });
+}
+
+const seg = (c, t) => ["acerto", "erro", "pendente"].map((k) => `<i class="s-${k}" style="width:${(c[k] / t) * 100}%"></i>`).join("");
+const contar = (L, qs) => { const c = { acerto: 0, erro: 0, pendente: 0, branco: 0, anulada: 0 }; qs.forEach((q) => c[status(L, q)]++); return c; };
+
+// Relatório de desempenho (atualiza em tempo real)
+function relatorio(L) {
+  const total = L.questoes.length, c = contar(L, L.questoes);
+  const corr = c.acerto + c.erro, pct = corr ? (c.acerto / corr) * 100 : 0;
+  const pctTotal = (c.acerto / (total - c.anulada || 1)) * 100;
+  let blocos = "";
+  for (let s = 1; s <= L.questoes[total - 1].num; s += TAM) {
+    const qs = L.questoes.filter((q) => q.num >= s && q.num < s + TAM);
+    if (!qs.length) continue;
+    const b = contar(L, qs), bc = b.acerto + b.erro;
+    blocos += `<div class="brow"><span>${s}–${qs[qs.length - 1].num}</span><div class="bar">${seg(b, qs.length)}</div>
+      <span>${bc ? Math.round((b.acerto / bc) * 100) + "%" : "—"}</span></div>`;
+  }
+  return `<details class="card" open><summary><b>Relatório de desempenho</b></summary>
+    <div class="stats"><div><b>${total}</b>Questões</div><div><b>${total - c.branco}</b>Respondidas</div>
+    <div><b>${c.branco}</b>Em branco</div><div><b>${c.acerto}</b>Acertos</div><div><b>${c.erro}</b>Erros</div>
+    <div><b>${pct.toFixed(1)}%</b>Aproveitamento</div></div>
+    <p class="muted">Aproveitamento = acertos ÷ questões corrigidas (${corr}). Sobre o total da lista: ${pctTotal.toFixed(1)}%.
+    ${c.pendente ? `${c.pendente} marcada(s) aguardando correção.` : ""}</p>
+    <div class="bar big">${seg(c, total)}</div>
+    <p class="muted"><i class="dot s-acerto"></i>Acertos <i class="dot s-erro"></i>Erros <i class="dot s-pendente"></i>Marcadas (não corrigidas) · cinza = em branco</p>
+    <h4>Por bloco de ${TAM} (% de acerto entre as corrigidas)</h4>${blocos}
+    <button id="refazer">Refazer lista inteira</button></details>`;
+}
+
+function renderLista(L) {
+  const total = L.questoes.length;
+  if (!total) return '<p class="card">Não consegui identificar questões neste PDF (talvez seja escaneado).</p>';
+  const temGab = Object.keys(L.gabarito).length > 0, maxN = L.questoes[total - 1].num;
+  const vis = visiveis(L); exibidas = vis.map((q) => q.num); const pend = pendentesTela(L).length;
+
+  let h = temGab ? "" : '<p class="card">⚠️ Gabarito não encontrado no final do PDF — a correção não será possível.</p>';
+  h += `<div id="rel">${relatorio(L)}</div>`;
+
+  // Filtros + blocos
+  let chips = `<button class="chip ${faixa.de <= 1 && faixa.ate >= maxN ? "on" : ""}" data-de="1" data-ate="9999">Todos</button>`;
+  for (let s = 1; s <= maxN; s += TAM) {
+    const e = Math.min(s + TAM - 1, maxN);
+    chips += `<button class="chip ${faixa.de === s && faixa.ate === e ? "on" : ""}" data-de="${s}" data-ate="${e}">${s}–${e}</button>`;
+  }
+  h += `<div class="filtros"><div class="chips">${FILTROS.map(([k, t]) => `<button class="chip ${filtro === k ? "on" : ""}" data-f="${k}">${t}</button>`).join("")}</div>
+    <div class="chips"><span class="muted">Blocos:</span>${chips}</div>
+    <div class="faixa">Da questão <input type="number" id="de" min="1" max="${maxN}" value="${faixa.de}"> até
+    <input type="number" id="ate" min="1" max="${maxN}" value="${Math.min(faixa.ate, maxN)}"></div>
+    <p class="muted">Exibindo ${vis.length} de ${total} questões</p></div>`;
+
+  h += vis.map((q) => {
+    const s = status(L, q), marc = L.respostas[q.num], certa = L.gabarito[q.num];
+    // Uma questão corrigida fica bloqueada até o usuário clicar em "↺ refazer".
+    const bloqueada = !!(L.corrigidas && L.corrigidas[q.num]);
+    const corr = bloqueada && ["acerto", "erro", "anulada"].includes(s);
+    const fb = !corr ? "" : s === "acerto" ? `✅ Acertou! Gabarito: ${certa}` :
+      s === "erro" ? `❌ Errou. Você marcou ${marc} — gabarito: ${certa}` : "Questão anulada / sem gabarito.";
+    const cortadas = (L.riscadas && L.riscadas[q.num]) || "";
+    const alts = Object.entries(q.alternativas).sort(([a], [b]) => a.localeCompare(b)).map(([k, t]) => {
+      const cl = [cortadas.includes(k) ? "cut" : "", marc === k ? "sel" : "", corr && certa === k ? "certa" : "",
+        corr && marc === k && certa && marc !== certa ? "errada" : ""].join(" ");
+      return `<div class="altrow ${cl}"><label class="alt"><input type="radio" name="q${q.num}" value="${k}" data-q="${q.num}"
+       ${marc === k ? "checked" : ""} ${bloqueada ? "disabled" : ""}><span class="letra">${k}</span><span class="atxt">${q.tipo === "CE" ? t : esc(limpar(t))}</span></label>
+       ${bloqueada ? "" : `<button class="cut-btn" data-x="${q.num}|${k}" title="Riscar / desconsiderar">✂️</button>`}</div>`;
+    }).join("");
+    const hd = cabecalhoQuestao(q.enunciado), matNome = ((materias.find((m) => m.id === L.materia)) || {}).nome;
+    const badges = [["banca", hd.banca], ["ano", hd.ano], ["orgao", hd.orgao], ["mat", matNome]].filter((b) => b[1])
+      .map(([k, v]) => `<span class="badge ${k}">${esc(v)}</span>`).join("");
+    return `<div class="card q ${{ acerto: "ok", erro: "err", pendente: "pend" }[s] || ""}" data-qn="${q.num}"><div class="qhead"><span class="qnum">Questão ${q.num}</span>
+      <span class="qbtns"><button class="ia-btn" data-ia="${q.num}" title="Explicação direto na tela">Explicar com IA</button>${bloqueada ? `<button class="mini" data-rq="${q.num}">↺ refazer</button>` : ""}</span></div>
+      <div class="badges">${badges}</div>
+      <div class="enun">${enunciadoHTML(hd.resto, q.tabelas)}</div><div class="alts">${alts}</div>
+      ${fb ? `<p class="fb">${fb}</p>` : ""}<div id="ia-${q.num}">${iaBolha(L, q)}</div></div>`;
+  }).join("") || '<p class="muted">Nenhuma questão para este filtro/bloco.</p>';
+
+  return h + `<button id="corrigir" class="pri" ${temGab && pend ? "" : "disabled"}>Corrigir questões marcadas (${pend})</button>`;
+}
+
+
+// ---------- Interface: abas de matérias + PDFs em linha ----------
+let matFiltro = "";
+function renderMaterias() { // lista vertical (sidebar no desktop / janela no celular), com busca
+  const q = sem(matFiltro);
+  const html = materias.filter((m) => !q || sem(m.nome).includes(q)).map((m) => {
+    const n = listas.filter((l) => l.materia === m.id).length;
+    return `<button class="mitem ${m.id === sel.materia && secao === "questoes" ? "on" : ""}" data-m="${m.id}"><span class="mdot2" style="--h:${hue(m.nome)}"></span><span class="mn">${esc(m.nome)}</span><span class="mc">${n}</span></button>`;
+  }).join("") || '<p class="muted" style="padding:6px 8px">Nenhuma matéria.</p>';
+  ["listaMaterias", "listaMaterias2"].forEach((id) => { const e = $(id); if (e) e.innerHTML = html; });
+}
+
+function render() {
+  const y = scrollY;
+  materias.sort(alfa);
+  if (!materias.some((m) => m.id === sel.materia)) sel.materia = materias[0]?.id || null;
+  renderMaterias();
+  renderPainel();
+  scrollTo(0, y);
+}
+
+function renderPainel() {
+  const el = $("painel"), m = materias.find((x) => x.id === sel.materia);
+  if (!m) { el.innerHTML = `<div class="retomar-slot" data-ctx="painel">${retomarHTML("painel")}</div><div class="retomar vazio"><div><div class="rt-tit sm">Comece criando uma matéria</div><div class="rt-det">Use o botão ＋ ao lado de Matérias, no menu. Depois envie o PDF da lista de questões.</div></div></div><p><button class="mobonly" data-abrirmat="1">Matérias</button></p>`; return; }
+  const ls = listas.filter((l) => l.materia === m.id).sort(alfa); // ordem alfabética
+  if (!ls.some((l) => l.id === sel.lista)) sel.lista = null;
+  let h = `<div class="retomar-slot" data-ctx="painel">${retomarHTML("painel")}</div>
+    <div class="phead"><h2>${esc(m.nome)}</h2>
+    <span class="rhbtns"><button class="mobonly" data-abrirmat="1">Trocar matéria</button><button data-rm="${m.id}">Renomear</button><button data-dm="${m.id}">Excluir</button></span></div>
+    <div class="card tools-card"><div class="tools">
+      <label>Enviar PDF(s) <input type="file" id="pdf" accept="application/pdf" multiple></label>
+      <label>Leitor <select id="leitorPdf"><option value="ia" ${modoLeitor() === "ia" ? "selected" : ""}>Gemini (recomendado)</option><option value="local" ${modoLeitor() === "local" ? "selected" : ""}>Leitor local</option></select></label>
+      <button data-iacfg="1">Configurar Gemini</button></div>
+    <div id="status" class="muted" style="white-space:pre-wrap">${esc(statusImport)}</div>
+    ${ultimoTexto && statusImport.includes("⚠️") ? `<details><summary>Ver texto lido do PDF</summary><pre class="rawtxt">${esc(ultimoTexto.slice(0, 4000))}</pre></details>` : ""}</div>
+    <div class="card"><div class="cardh"><b>Materiais</b><span class="count">${ls.length}</span></div>` +
+    (ls.map((l) => {
+      return `<div class="pdfrow ${l.id === sel.lista ? "on" : ""}" data-l="${l.id}"><span class="nm">${esc(l.nome)}</span>
+        <span class="stat" data-stat="${l.id}">${statTxt(l)}</span>
+        <button data-rn="${l.id}" title="Renomear arquivo">✏️</button><button data-dl="${l.id}" title="Excluir PDF">🗑️</button></div>`;
+    }).join("") || '<p class="muted" style="margin:6px 0 0">Nenhum PDF ainda. Envie um acima.</p>') + "</div>";
+  const L = ls.find((l) => l.id === sel.lista);
+  el.innerHTML = h + (L ? renderLista(L) : "");
+}
+
+// ---------- Conteúdo e Cronograma (salvos em users/{uid}/config/...) ----------
+const R = (nome, material, detalhe = "") => ({ nome, material, detalhe });
+const SEED_CONT = {
+  regular: [R("Direito administrativo", "Apostila 8", "exercícios"), R("Contabilidade geral", "Apostila 15", "página 32"),
+    R("Direito constitucional", "Apostila 9", "página 17"), R("Matemática financeira", "Apostila 3", "página 35"),
+    R("Direito tributário", "Apostila 10", "página 14"), R("Português", "Apostila 2", "página 28"),
+    R("Tecnologia da informação", "Apostila 1", "página 18"), R("Raciocínio lógico", "Aula 2"),
+    R("Auditoria", "Apostila 2", "página 28"), R("Contabilidade pública", "Apostila 3", "página 8"),
+    R("Estatística", "Apostila 2", "página 21"), R("Direito penal", "Apostila 1", "página 40"),
+    R("Direito empresarial", "Apostila 1", "página 23")],
+  passe: [R("Direito constitucional", "Apostila 4"), R("Contabilidade geral", "Apostila 8"),
+    R("Direito tributário", "Apostila 6", "exercício 7"), R("Português", "Apostila 2")]
+};
+const SEED_CRON = { ativo: "c1", ciclos: [{ id: "c1", nome: "Ciclo 1", dias: {
+  seg: ["Contabilidade geral", "Auditoria"], ter: ["Direito tributário"],
+  qua: ["Direito administrativo", "Direito constitucional"], qui: ["Português"],
+  sex: ["Tecnologia da informação"], sab: ["Estatística", "Matemática financeira", "Raciocínio lógico"], dom: [] } }] };
+const DIAS = [["seg", "Segunda-feira"], ["ter", "Terça-feira"], ["qua", "Quarta-feira"], ["qui", "Quinta-feira"],
+  ["sex", "Sexta-feira"], ["sab", "Sábado"], ["dom", "Domingo"]];
+let conteudo = null, cron = null;
+const cfgRef = (n) => doc(fs, "users", user.uid, "config", n);
+const salvarConteudo = () => {
+  const st = $("saveStatus"); if (st) st.textContent = "Salvando…";
+  return setDoc(cfgRef("conteudo"), conteudo).then(() => { const e = $("saveStatus"); if (e) e.textContent = "✓ Salvo na nuvem"; }).catch(falha);
+};
+const salvarCron = () => { atualizarPerfil(); return setDoc(cfgRef("cronograma"), cron).catch(falha); };
+const canon = (o) => JSON.stringify(o, (k, v) => v && typeof v === "object" && !Array.isArray(v)
+  ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : 1))) : v);
+
+// Formata o texto de uma página de apostila: títulos, parágrafos, tópicos e tabelas HTML
+function formatarPagina(linhas) {
+  const ex = extrairTabelas(linhas.map((l) => l.t).join("\n"));
+  const out = []; let par = [];
+  const flush = () => { if (par.length) { out.push(`<p>${esc(par.join(" "))}</p>`); par = []; } };
+  for (const raw of ex.texto.split("\n")) {
+    const t = raw.trim(); if (!t) { flush(); continue; }
+    const m = /^\[\[T(\d+)\]\]$/.exec(t);
+    if (m) { flush(); out.push(tabelaHTML(ex.tabelas[+m[1]])); continue; }
+    const letras = t.replace(/[^A-Za-zÀ-ú]/g, "").length || 1, maiusc = t.replace(/[^A-ZÀ-Ú]/g, "").length / letras;
+    if (t.length > 2 && t.length <= 80 && !/[.;,:]$/.test(t) && (maiusc > 0.7 || /^(\d+(\.\d+)*[.)]?|cap[ií]tulo|aula|parte|item)\s+\S/i.test(t))) { flush(); out.push(`<h3>${esc(t)}</h3>`); continue; }
+    if (/^[•●▪■◦\-–—]\s+/.test(t)) { flush(); out.push(`<p class="li">• ${esc(t.replace(/^[•●▪■◦\-–—]\s+/, ""))}</p>`); continue; }
+    par.push(t);
+    if (/[.!?:;]$/.test(t) && t.length < 60) flush();
+  }
+  flush();
+  return out.join("");
+}
+let apPdf = null, apCtx = null;
+async function mostrarPaginaApostila(n) {
+  if (!apPdf) return;
+  n = Math.min(Math.max(1, n || 1), apPdf.numPages);
+  $("lPag").value = n; $("lPag").max = apPdf.numPages; $("lTotal").textContent = "/ " + apPdf.numPages;
+  $("lCorpo").innerHTML = '<p class="muted">⏳ Lendo página…</p>';
+  try {
+    const linhas = (await linhasDaPagina(await apPdf.getPage(n))).filter((l) => !LIXO.test(l.t));
+    $("lCorpo").innerHTML = linhas.length ? formatarPagina(linhas) : '<p class="muted">Esta página não tem texto selecionável (pode ser imagem).</p>';
+    $("lCorpo").scrollTop = 0;
+    registrarProgresso({ tipo: "apostila", arquivo: (apArq && apArq.name) || "", titulo: $("lTitulo").textContent || "", pagina: n, total: apPdf.numPages,
+      nome: (apMeta && apMeta.nome) || "", material: (apMeta && apMeta.material) || "", sec: (apMeta && apMeta.sec) || "", i: apMeta ? apMeta.i : -1 });
+  } catch (e) { $("lCorpo").innerHTML = "❌ " + esc(e.message); }
+}
+async function abrirApostila(file, pag, titulo) {
+  try {
+    await garantirPdfjs();
+    apPdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+    apArq = file; apCache = {};
+    $("lTitulo").textContent = titulo || file.name;
+    $("dlgLeitor").showModal();
+    mostrarPaginaApostila(pag || 1);
+  } catch (e) { alert("Não foi possível abrir o PDF: " + e.message); }
+}
+$("lFechar").onclick = () => $("dlgLeitor").close();
+$("lIA").onclick = () => formatarComGemini();
+$("lPrev").onclick = () => mostrarPaginaApostila(+$("lPag").value - 1);
+$("lNext").onclick = () => mostrarPaginaApostila(+$("lPag").value + 1);
+$("lPag").onchange = () => mostrarPaginaApostila(+$("lPag").value);
+
+// ---------- Leitura de PDF pelo Gemini (PDF em Base64 enviado à API) ----------
+const paraBase64 = (file) => new Promise((ok, no) => {
+  const r = new FileReader(); r.onload = () => ok(String(r.result).split(",")[1]); r.onerror = () => no(new Error("Falha ao ler o arquivo")); r.readAsDataURL(file);
+});
+const bytesParaBase64 = (u8) => { let t = ""; for (let i = 0; i < u8.length; i += 0x8000) t += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(t); };
+const MAX_PDF = 14 * 1024 * 1024; // envio direto: ~20 MB por requisição (Base64 aumenta 33%)
+
+const SISTEMA_EXTRACAO = (inicio) => `Você é um extrator de dados de provas de concursos. Receberá um PDF (lista de questões, por exemplo do Estratégia Concursos) e deve devolver SOMENTE objetos JSON compactos, um por linha (JSON Lines), sem markdown, sem comentários e sem nenhum texto fora do JSON.
+
+Formato:
+{"tipo":"questao","numero":1,"banca":"FGV","ano":2022,"orgao":"SEFAZ-MG","enunciado":"...","alternativas":{"A":"...","B":"...","C":"...","D":"...","E":"..."},"tabelas":[{"titulo":"Balanço Patrimonial","linhas":[["ATIVO"],["Caixa","1.000"],["Total","3.500"]]}],"gabarito":"B"}
+e, ao terminar TODAS as questões do PDF, uma última linha: {"tipo":"fim"}
+
+Regras:
+- Extraia TODAS as questões em ordem crescente, começando exatamente pela questão número ${inicio}.
+- Transcreva enunciados e alternativas fielmente, corrigindo apenas quebras de linha e hifenização do PDF. Mantenha afirmativas I., II., III., IV. dentro do enunciado, separadas por espaço. Remova rodapés, cabeçalhos, marcas d'água, links, numeração de página e assinaturas de professor.
+- Questões Certo/Errado (sem alternativas A–E): use "alternativas":{} e gabarito "C" ou "E".
+- Tabelas (balanço patrimonial, DRE, razonetes, quadros comparativos): coloque cada tabela em "tabelas" (cada linha é um array de células de texto; mantenha valores, sinais e parênteses exatamente como no PDF; títulos de seção como linha de uma só célula) e escreva o marcador [[T0]], [[T1]]... no ponto exato do enunciado em que a tabela aparece.
+- "gabarito": use o gabarito oficial das páginas finais do PDF (letra A–E; C/E para Certo/Errado; "ANULADA" se anulada). Se não encontrar, use null. NÃO resolva a questão você mesmo.
+- banca, ano e orgao: preencha a partir do cabeçalho da questão, se existir; senão null.
+- Não invente nada. Se algo estiver ilegível, escreva [ilegível].`;
+
+const SISTEMA_APOSTILA = `Você transcreve páginas de apostilas de concursos para HTML limpo e semântico. Responda SOMENTE com HTML, sem markdown e sem comentários.
+Use apenas estas tags: h3, h4, p, ul, ol, li, strong, em, blockquote, table, thead, tbody, tr, th, td. Sem estilos, classes ou atributos.
+Tabelas (balanço patrimonial, DRE, razonetes, quadros) devem virar <table> com cabeçalho e valores fiéis ao PDF. Preserve títulos, listas, destaques (strong), fórmulas em texto e exemplos numéricos.
+Remova cabeçalhos, rodapés, marcas d'água, links e numeração de página. Não resuma, não explique e não acrescente nada.`;
+
+// Extrai todos os objetos JSON de um texto (funciona com JSON em linhas, formatado ou truncado)
+function objetosJson(t) {
+  const out = []; let d = 0, ini = -1, str = false, esc = false;
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (str) { if (esc) esc = false; else if (ch === "\\") esc = true; else if (ch === '"') str = false; continue; }
+    if (ch === '"') { if (d > 0) str = true; continue; }
+    if (ch === "{") { if (d === 0) ini = i; d++; }
+    else if (ch === "}" && d > 0) { d--; if (d === 0) { try { out.push(JSON.parse(t.slice(ini, i + 1))); } catch (e) { /* objeto inválido: ignora */ } } }
+  }
+  return out;
+}
+
+function questaoDeIA(o) { // converte o JSON do Gemini no formato do app
+  const nulo = (x) => (x == null || x === "null" || x === "" ? null : x);
+  const cab = [nulo(o.banca), nulo(o.orgao), nulo(o.ano)].filter(Boolean).join(" / ");
+  let enun = String(o.enunciado || "").replace(/\s+/g, " ").trim();
+  if (cab && !/^\s*\(/.test(enun)) enun = `(${cab}) ${enun}`; // o cabeçalho vira as badges Banca/Ano/Órgão
+  const alt = {};
+  Object.entries(o.alternativas || {}).forEach(([k, v]) => { const L = String(k).trim().toUpperCase().charAt(0); if ("ABCDE".includes(L) && v != null) alt[L] = String(v).replace(/\s+/g, " ").trim(); });
+  const me = Object.keys(alt).length >= 2;
+  const tabelas = (o.tabelas || []).map((t) => {
+    const linhas = (t.linhas || []).map((r) => ({ c: (Array.isArray(r) ? r : [r]).map((x) => String(x == null ? "" : x)) }));
+    if (t.titulo) linhas.unshift({ c: [String(t.titulo)] });
+    return { linhas };
+  }).filter((t) => t.linhas.length);
+  tabelas.forEach((t, i) => { if (!enun.includes(`[[T${i}]]`)) enun += ` [[T${i}]]`; });
+  return { num: +o.numero, tipo: me ? "ME" : "CE", enunciado: enun,
+    alternativas: me ? Object.fromEntries(Object.keys(alt).sort().map((k) => [k, alt[k]])) : { C: "Certo", E: "Errado" }, tabelas };
+}
+
+async function geminiStream(modelo, sistema, b64, usuario, key, onTexto) {
+  const texto = await geminiUma(modelo, sistema, usuario, key, b64);
+  if (onTexto) onTexto(texto);
+  return { texto, fim: "STOP" };
+}
+
+async function streamComCadeia(c, sistema, b64, usuario, info, onTexto) { // Pro primeiro; repete/cai para outro modelo se preciso
+  const cadeia = [...new Set([c.model || MODELOS.gemini, MODELOS.gemini, "gemini-3-flash-preview", "gemini-2.5-flash"])];
+  let ultimo;
+  for (let i = 0; i < cadeia.length; i++) {
+    const m = cadeia[i];
+    for (let t = 0; t < 3; t++) {
+      try { const r = await geminiStream(m, sistema, b64, usuario, c.key, onTexto); r.modelo = m; return r; }
+      catch (err) {
+        ultimo = err;
+        if (err.status === 401 || err.status === 403 || (err.status === 400 && /api key/i.test(err.message))) throw err;
+        if (err.status === 413) throw new Error("PDF grande demais para envio direto (limite ~20 MB). Divida o arquivo.");
+        if ([500, 502, 503, 504].includes(err.status) && t < 2) { info(`Alta demanda em ${m}. Nova tentativa (${t + 2}/3)…`); await esperar(2000 * (t + 1)); continue; }
+        break;
+      }
+    }
+    if (i + 1 < cadeia.length) info(`${m} indisponível agora. Tentando ${cadeia[i + 1]}…`);
+  }
+  throw ultimo;
+}
+
+async function processarPDFGemini(file, c, info) {
+  if (file.size > MAX_PDF) throw new Error("o PDF passa de ~14 MB (limite de envio direto à API)");
+  info("📤 Preparando o PDF…");
+  const b64 = await paraBase64(file);
+  const mapa = new Map(), gab = {}; let fim = false, modelo = ""; c = { ...c };
+  for (let passo = 0; passo < 8 && !fim; passo++) {
+    const inicio = mapa.size ? Math.max(...mapa.keys()) + 1 : 1, antes = mapa.size;
+    const r = await streamComCadeia(c, SISTEMA_EXTRACAO(inicio), b64, `Analise o PDF anexo e extraia as questões conforme as instruções, a partir da questão ${inicio}.`, info,
+      (txt) => info(`🤖 Gemini lendo o PDF… ${antes + (txt.match(/"tipo"\s*:\s*"questao"/g) || []).length} questões`));
+    modelo = r.modelo; c.model = r.modelo;
+    for (const o of objetosJson(r.texto)) {
+      if (o.tipo === "fim") fim = true;
+      else if (o.tipo === "questao" && +o.numero >= inicio && !mapa.has(+o.numero)) {
+        const q = questaoDeIA(o); mapa.set(q.num, q);
+        const g = o.gabarito == null ? null : norm(String(o.gabarito).trim());
+        if (g && (/^[A-E]$/.test(g) || g === "ANULADA")) gab[q.num] = g;
+      }
+    }
+    if (!fim && mapa.size === antes) throw new Error(passo === 0 ? "o Gemini não retornou nenhuma questão" : "o Gemini parou de retornar questões");
+    if (!fim) info(`🤖 Continuando a partir da questão ${Math.max(...mapa.keys()) + 1}…`);
+  }
+  if (!mapa.size) throw new Error("nenhuma questão encontrada");
+  const questoes = [...mapa.values()].sort((a, b) => a.num - b.num);
+  return { id: Date.now() + Math.random().toString(36).slice(2, 6), nome: file.name.replace(/\.pdf$/i, ""), questoes, gabarito: gab, respostas: {}, corrigidas: {}, paginas: null, leitor: modelo };
+}
+
+const modoLeitor = () => localStorage.getItem("leitor_pdf") || "ia";
+async function lerPDF(f, info) { // Gemini primeiro; se não der, cai para o leitor local
+  const c = cfgIA();
+  if (modoLeitor() === "ia") {
+    if (c.prov === "gemini") {
+      try { return await processarPDFGemini(f, c, info); }
+      catch (e) { statusImport += `⚠️ O Gemini não conseguiu ler ${f.name} (${e.message}). Usando o leitor local…\n`; }
+    } else statusImport += "ℹ️ O servidor de IA não está configurado. Usando o leitor local…\n";
+  }
+  return processarPDF(f);
+}
+
+// ---------- Apostilas: recorte de páginas + transcrição pelo Gemini ----------
+async function garantirPdfLib() {
+  if (window.PDFLib) return;
+  for (const u of ["https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js", "https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"]) {
+    try { await carregarScript(u); if (window.PDFLib) return; } catch (e) { /* tenta o próximo */ }
+  }
+  throw new Error("não foi possível carregar a biblioteca de recorte de PDF");
+}
+async function recortarPDF(file, de, ate) { // devolve um PDF só com as páginas pedidas (em Base64)
+  await garantirPdfLib();
+  const src = await PDFLib.PDFDocument.load(await file.arrayBuffer(), { ignoreEncryption: true }), dst = await PDFLib.PDFDocument.create();
+  const idx = []; for (let i = de - 1; i < ate; i++) idx.push(i);
+  (await dst.copyPages(src, idx)).forEach((pg) => dst.addPage(pg));
+  return bytesParaBase64(await dst.save());
+}
+// Sanitiza o HTML devolvido pela IA: só tags conhecidas, sem atributos (tabelas ganham o invólucro responsivo)
+function sanitizarHTML(h) {
+  const ok = new Set(["h3", "h4", "p", "ul", "ol", "li", "strong", "em", "blockquote", "table", "thead", "tbody", "tr", "th", "td", "br"]);
+  return String(h).replace(/^\s*```(?:html)?/i, "").replace(/```\s*$/, "").split(/(<\/?[a-zA-Z][^<>]*>)/).map((part, i) => {
+    if (i % 2 === 0) return part.replace(/</g, "&lt;").replace(/>/g, "&gt;"); // texto
+    const m = /^<(\/?)([a-zA-Z0-9]+)([^>]*)>$/.exec(part);
+    const tag = m[2].toLowerCase();
+    if (!ok.has(tag)) return "";
+    if (m[1]) return tag === "table" ? "</table></div>" : `</${tag}>`;
+    if (tag === "table") return '<div class="tblwrap"><table class="qtab">';
+    const span = /\bcolspan\s*=\s*["']?(\d{1,2})/i.exec(m[3]);
+    return `<${tag}${span && (tag === "td" || tag === "th") ? ` colspan="${span[1]}"` : ""}>`;
+  }).join("");
+}
+let apArq = null, apCache = {};
+async function formatarComGemini() {
+  const c = cfgIA();
+  if (!apPdf || !apArq) return;
+  if (c.prov !== "gemini") return alert("Selecione Google Gemini em ⚙️ para usar este recurso.");
+  const de = +$("lPag").value || 1, ate = Math.min(apPdf.numPages, de + (+$("lQtd").value || 3) - 1), k = `${de}-${ate}`;
+  const corpo = $("lCorpo");
+  if (apCache[k]) { corpo.innerHTML = apCache[k]; return; }
+  corpo.innerHTML = `<p class="muted">🤖 Gemini lendo as páginas ${de} a ${ate}…</p>`;
+  try {
+    let b64;
+    try { b64 = await recortarPDF(apArq, de, ate); }
+    catch (e) { if (apArq.size > MAX_PDF) throw e; b64 = await paraBase64(apArq); } // sem recorte: envia o arquivo inteiro
+    const r = await gemini(c, SISTEMA_APOSTILA, `Transcreva para HTML as páginas ${de} a ${ate} do PDF anexo (se o PDF anexo tiver só essas páginas, transcreva todas).`,
+      (m) => { corpo.innerHTML = `<p class="muted">🤖 ${esc(m)}</p>`; }, b64);
+    apCache[k] = `<div class="gemhtml">${sanitizarHTML(r.txt)}</div><p class="muted">Páginas ${de}–${ate} · transcrito por ${esc(r.modelo)}</p>`;
+    corpo.innerHTML = apCache[k];
+  } catch (e) { corpo.innerHTML = `<p>❌ ${esc(e.message)}</p>`; }
+}
+
+function mostrarSecao(sec) {
+  secao = sec; saveUi();
+  ["questoes", "diagnostico", "caderno", "conteudo", "cronograma"].forEach((k) => { $("sec" + k[0].toUpperCase() + k.slice(1)).hidden = k !== sec; });
+  document.querySelectorAll(".mi").forEach((b) => b.classList.toggle("on", b.dataset.sec === sec));
+  if (sec === "questoes") render(); else if (sec === "diagnostico") renderDiag(); else if (sec === "caderno") renderCaderno(); else if (sec === "conteudo") renderConteudo(); else renderCron();
+}
+
+// ---------- Diagnóstico por matéria + Explicar com IA ----------
+const MIN = 5; // mínimo de questões corrigidas para o diagnóstico ser considerado confiável
+const sem = (t) => (t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+const fmtAp = (r) => esc(r.material || "—") + (r.detalhe ? ` (${esc(r.detalhe)})` : "");
+
+function statsMateria(m) { // acertos/erros nas questões corrigidas de todas as listas da matéria
+  let ac = 0, er = 0, resp = 0, tot = 0;
+  listas.filter((l) => l.materia === m.id).forEach((l) => {
+    const c = contar(l, l.questoes); ac += c.acerto; er += c.erro; resp += l.questoes.length - c.branco; tot += l.questoes.length;
+  });
+  return { ac, er, resp, tot, corr: ac + er, pct: ac + er ? (ac / (ac + er)) * 100 : null };
+}
+
+function diagLinhas() { // cruza matérias das Questões com as apostilas cadastradas em Conteúdo (pelo nome)
+  const mapa = new Map();
+  const get = (nome) => { const k = sem(nome); if (!mapa.has(k)) mapa.set(k, { nome, st: null, reg: [], pas: [] }); return mapa.get(k); };
+  materias.forEach((m) => { const e = get(m.nome); e.st = statsMateria(m); e.m = m; });
+  ((conteudo && conteudo.regular) || []).forEach((r) => get(r.nome).reg.push(r));
+  ((conteudo && conteudo.passe) || []).forEach((r) => get(r.nome).pas.push(r));
+  return [...mapa.values()];
+}
+
+function nivel(x) {
+  const st = x.st;
+  if (!st || st.corr < MIN) return { k: "nd", ic: "⚪", txt: st && st.corr ? `Poucos dados (${st.corr} corrigidas)` : "Sem questões corrigidas" };
+  if (st.pct < 60) return { k: "alto", ic: "🔴", txt: "Revisar com prioridade" };
+  if (st.pct < 75) return { k: "med", ic: "🟡", txt: "Atenção" };
+  return { k: "ok", ic: "🟢", txt: "Bom desempenho" };
+}
+
+const diasDe = (nome) => {
+  if (!cron) return "";
+  const c = cicloAtivo();
+  return DIAS.filter(([k]) => ((c.dias && c.dias[k]) || []).some((n) => sem(n) === sem(nome))).map(([, d]) => d.slice(0, 3)).join(", ");
+};
+
+const numLista = (nome) => { const m = /(?:aula|apostila|pdf|lista|cap[ií]tulo)\D{0,3}(\d+)/i.exec(nome || ""); return m ? +m[1] : null; };
+const numDe = (t) => { const m = /(\d+)/.exec(t || ""); return m ? +m[1] : null; };
+const statsLista = (l) => { const c = contar(l, l.questoes), corr = c.acerto + c.erro; return { ac: c.acerto, er: c.erro, resp: l.questoes.length - c.branco, tot: l.questoes.length, pct: corr ? (c.acerto / corr) * 100 : null }; };
+const corNivel = (p) => (p === null ? "nd" : p < 60 ? "alto" : p < 75 ? "med" : "ok");
+
+function diagHTML() {
+  if (!conteudo) return "";
+  const linhas = diagLinhas().map((x) => ({ ...x, nv: nivel(x) }));
+  const comDados = linhas.filter((x) => x.st && x.st.corr >= MIN).sort((a, b) => a.st.pct - b.st.pct); // piores primeiro
+  const resto = linhas.filter((x) => !(x.st && x.st.corr >= MIN)).sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+  const ap = (x) => [...x.reg.map((r) => `📘 ${fmtAp(r)}`), ...x.pas.map((r) => `⭐ Passe: ${fmtAp(r)}`)].join(" · ") || "sem apostila cadastrada (cadastre em Conteúdo)";
+  const alerta = comDados.filter((x) => x.st.pct < 75), foco = alerta.slice(0, 3);
+  const comSt = linhas.filter((x) => x.st);
+  const tAc = comSt.reduce((a, x) => a + x.st.ac, 0), tEr = comSt.reduce((a, x) => a + x.st.er, 0), geral = tAc + tEr ? (tAc / (tAc + tEr)) * 100 : null;
+  const tiles = `<div class="stats dtiles"><div><b>${comSt.length}</b>Matérias</div><div><b>${tAc + tEr}</b>Corrigidas</div>
+    <div><b>${geral === null ? "—" : geral.toFixed(0) + "%"}</b>Acerto geral</div><div><b>${alerta.length}</b>Em alerta</div></div>`;
+  const topo = foco.length
+    ? `<div class="foco"><b>Foco da semana: revise primeiro</b>` + foco.map((x) => {
+        const dd = diasDe(x.nome);
+        return `<div class="focoitem ${x.nv.k}"><b>${esc(x.nome)}</b> — ${x.st.pct.toFixed(0)}% de acerto<br><span>📖 ${ap(x)}</span>${dd ? `<br><span>📅 No cronograma: ${dd}</span>` : ""}</div>`;
+      }).join("") + "</div>"
+    : comDados.length ? '<div class="foco ok">🎉 Todas as matérias com dados estão com 75% ou mais. Continue assim!</div>'
+    : `<div class="foco nd">Resolva e corrija pelo menos ${MIN} questões de uma matéria (aba Questões) para gerar o diagnóstico.</div>`;
+  const card = (x) => {
+    const st = x.st, p = st && st.corr ? st.pct : null;
+    const ls = (x.m ? listas.filter((l) => l.materia === x.m.id) : []).sort(alfa);
+    const lrows = ls.map((l) => {
+      const t = statsLista(l), n = numLista(l.nome);
+      const vinc = n === null ? [] : [...x.reg, ...x.pas].filter((r) => numDe(r.material) === n);
+      return `<div class="lrow"><div class="ltop"><span class="ln">📄 ${esc(l.nome)}</span><span class="lp">${t.pct === null ? "—" : t.pct.toFixed(0) + "%"}</span></div>
+        <div class="bar"><i class="s-${corNivel(t.pct)}" style="width:${t.pct === null ? 0 : t.pct}%"></i></div>
+        <div class="muted lsub">${t.ac} acertos · ${t.er} erros · ${t.resp}/${t.tot} respondidas${vinc.length ? ` · ↔ ${vinc.map((r) => "📘 " + fmtAp(r)).join(", ")}` : ""}</div></div>`;
+    }).join("");
+    return `<div class="drow ${x.nv.k}"><div class="dtop"><b>${esc(x.nome)}</b><span class="nvb">${x.nv.ic} ${x.nv.txt}</span></div>
+      <div class="dpctrow"><span class="dpct">${p === null ? "—" : p.toFixed(0) + "%"}</span><div class="bar big"><i class="s-${x.nv.k}" style="width:${p === null ? 0 : p}%"></i></div></div>
+      <div class="muted">${p === null ? "Sem questões corrigidas" : `${st.ac} acertos / ${st.er} erros`}${st ? ` · ${st.resp}/${st.tot} respondidas` : ""}</div>
+      <div class="dap">${ap(x)}</div>${lrows ? `<div class="lrows"><b class="lt">Por aula / lista de questões</b>${lrows}</div>` : ""}</div>`;
+  };
+  return tiles + topo + `<div class="dlist big">${[...comDados, ...resto].map(card).join("")}</div>`;
+}
+function renderDiag() {
+  const el = $("secDiagnostico");
+  if (!conteudo) { el.innerHTML = '<p class="muted">Carregando...</p>'; return; }
+  el.innerHTML = `<div class="ctop"><div><h2>Diagnóstico</h2><span class="savechip">Painel de revisão, SEFAZ-MG</span></div></div>
+    <p class="muted dintro">Cruza o seu % de acertos (questões corrigidas) por matéria e por aula/lista com as apostilas cadastradas em Conteúdo. Mínimo de ${MIN} questões corrigidas por matéria para entrar no ranking.</p>` + diagHTML();
+}
+const atualizarDiag = () => { if (secao === "diagnostico") renderDiag(); };
+
+function aviso(msg) {
+  const el = document.createElement("div"); el.className = "toast"; el.textContent = msg;
+  document.body.appendChild(el); setTimeout(() => el.remove(), 3500);
+}
+
+// Prompt para o ChatGPT: professor de Direito Tributário/Contabilidade/Legislação fiscal, banca FGV
+const SISTEMA_IA = `Você é um professor sênior e mentor de elite da área fiscal (Direito Tributário, Contabilidade e Legislação tributária/financeira), com profundo e absoluto domínio das características, do estilo, do perfil de cobrança e do histórico da banca FGV, especialmente nas provas de Auditor Fiscal das Secretarias de Fazenda (SEFAZ).
+
+Analise a questão que o aluno enviar e responda em português do Brasil, de forma clara, didática e cirúrgica, usando EXATAMENTE esta estrutura (títulos em markdown com ###):
+
+### ✅ Gabarito comentado
+Indique a alternativa correta e explique o fundamento central.
+
+### 🔍 Análise das alternativas
+Para cada alternativa, diga em uma ou duas frases por que está certa ou errada.
+
+### ⚠️ Pegadinhas da FGV
+Destaque EXPLICITAMENTE as armadilhas deste enunciado e das alternativas, e as pegadinhas que a FGV costuma usar nesse tema para confundir o candidato (palavras absolutas como "sempre", "apenas", "somente"; inversão de sujeito ou de regra e exceção; institutos parecidos trocados; prazos, percentuais e competências; jurisprudência aplicada fora do contexto; texto de lei quase igual ao correto).
+
+### 📊 Recorrência e importância
+Classifique o assunto como Baixa, Média, Alta ou Altíssima recorrência nas provas de Auditor Fiscal/SEFAZ e justifique em poucas linhas. Trate como estimativa baseada no padrão da banca; não invente estatísticas exatas.
+
+### 💡 Exemplo prático
+Um caso concreto e curto que fixe o conceito.
+
+### 📚 Base legal e jurisprudência
+Cite as leis de regência, o CTN, a CF/88, leis complementares, normas contábeis (CPC, NBC, Lei 6.404/76, MCASP, conforme o caso), súmulas e julgados do STF/STJ aplicáveis.
+
+### 🧠 Dica de memorização
+Um macete curto.
+
+Regras: não invente artigos, números de leis, súmulas ou julgados; se não tiver certeza, escreva "confirme na legislação". Se o gabarito oficial informado divergir da sua análise, aponte a divergência e explique (possível desatualização legislativa ou anulação). Se o aluno errou, explique o raciocínio que provavelmente o levou ao erro. Seja objetivo e evite enrolação.`;
+
+function dadosQuestao(L, q) {
+  const mat = ((materias.find((m) => m.id === L.materia)) || {}).nome || "";
+  const ce = q.tipo === "CE", nomeR = (r) => (!r ? "" : ce ? (r === "C" ? "Certo" : r === "E" ? "Errado" : r) : r);
+  const alts = ce ? "Julgue: Certo ou Errado." : Object.entries(q.alternativas).sort(([a], [b]) => a.localeCompare(b)).map(([k, t]) => `${k}) ${limpar(t)}`).join("\n");
+  const marc = L.respostas[q.num], certa = L.gabarito[q.num], temGab = certa && certa !== "ANULADA";
+  const situ = marc && temGab ? (marc === certa
+    ? "Eu ACERTEI: confirme se o meu raciocínio faz sentido e aprofunde o tema."
+    : "Eu ERREI: explique onde está o erro e a armadilha que provavelmente me levou a essa alternativa.") : "";
+  return `Matéria: ${mat || "não informada"}
+Questão ${q.num}:
+${enunciadoTexto(q)}
+
+${alts}
+
+Minha resposta: ${nomeR(marc) || "não respondi"}
+Gabarito oficial: ${temGab ? nomeR(certa) : "não informado"}
+${situ}`.trim();
+}
+const promptIA = (L, q) => SISTEMA_IA + "\n\n---\n\n" + dadosQuestao(L, q); // versão única (link do ChatGPT / cópia)
+
+function explicarIA(L, q) { // abre o ChatGPT em nova aba (e copia o prompt como garantia)
+  const txt = promptIA(L, q), url = "https://chatgpt.com/?q=" + encodeURIComponent(txt), longo = url.length > 6500;
+  window.open(longo ? "https://chatgpt.com/" : url, "_blank", "noopener");
+  if (navigator.clipboard) navigator.clipboard.writeText(txt).catch(() => {});
+  aviso(longo ? "Prompt copiado! Cole no ChatGPT." : "Abrindo o ChatGPT… (o prompt também foi copiado)");
+}
+
+function renomearLista(id) {
+  const l = listas.find((x) => x.id === id); if (!l) return;
+  const nome = (prompt("Novo nome do arquivo:", l.nome) || "").trim();
+  if (!nome || nome === l.nome) return;
+  l.nome = nome;                                         // atualiza na tela já…
+  updateDoc(ref("listas", id), { nome }).catch(falha);   // …e salva na nuvem
+  render();                                              // reordena (alfabética)
+}
+
+// ---------- Explicação com IA direto na tela (chave de API só neste aparelho) ----------
+const cfgIA = () => { try { return JSON.parse(localStorage.getItem("ia_cfg") || '{"prov":"gemini","model":""}'); } catch (e) { return {prov:"gemini",model:""}; } };
+// Configuração persistente: não pede a chave novamente neste navegador/origem.
+// A chave não é enviada ao Firebase; fica somente no armazenamento local do navegador.
+const IA_PROXY_URL = "/api/ai";
+const MODELOS = { gemini: "gemini-3.1-pro-preview", openai: "gpt-4o-mini", anthropic: "claude-sonnet-5-5" };
+const iaSt = {}; // estado dos balões: chave "listaId|nº" -> { open, estado, msg }
+const mdLite = (t) => esc(t).replace(/^#{1,4}\s*(.+)$/gm, "<h4>$1</h4>").replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/^\s*[-*]\s+/gm, "• ");
+
+const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
+async function geminiUma(modelo, sistema, usuario, key, pdf) {
+  const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), pdf ? 400000 : 150000);
+  try {
+    const r = await fetch(IA_PROXY_URL, { method: "POST", signal: ctl.signal, headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider: "gemini", model: modelo, system: sistema, user: usuario, pdfBase64: pdf || null }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { const e = new Error((j.error && (j.error.message || j.error)) || "HTTP " + r.status); e.status = r.status; throw e; }
+    if (!j.text) throw new Error("Resposta vazia do Gemini");
+    return j.text;
+  } catch (e) { if (e.name === "AbortError") { e.status = 504; e.message = "Tempo esgotado"; } throw e; }
+  finally { clearTimeout(to); }
+}
+// Linha Pro primeiro; em alta demanda tenta de novo e, se preciso, cai para o próximo modelo
+async function gemini(c, sistema, usuario, info, pdf) {
+  const cadeia = [...new Set([c.model || MODELOS.gemini, MODELOS.gemini, "gemini-3-flash-preview", "gemini-2.5-flash"])];
+  let ultimo;
+  for (let i = 0; i < cadeia.length; i++) {
+    const m = cadeia[i];
+    for (let t = 0; t < 3; t++) {
+      try { return { txt: await geminiUma(m, sistema, usuario, c.key, pdf), modelo: m }; }
+      catch (err) {
+        ultimo = err;
+        if (err.status === 401 || err.status === 403 || (err.status === 400 && /api key/i.test(err.message))) throw err; // chave inválida
+        if ([500, 502, 503, 504].includes(err.status) && t < 2) {
+          if (info) info(`Alta demanda em ${m}. Nova tentativa (${t + 2}/3)…`);
+          await esperar(2000 * (t + 1)); continue;
+        }
+        break; // 404 / 429 / outros: próximo modelo
+      }
+    }
+    if (info && i + 1 < cadeia.length) info(`${m} indisponível agora. Tentando ${cadeia[i + 1]}…`);
+  }
+  throw ultimo;
+}
+
+async function chamarIA(sistema, usuario, c, info) {
+  const modelo = c.model || MODELOS[c.prov || "gemini"] || MODELOS.gemini;
+  if (info) info("🔐 Enviando a solicitação pelo servidor seguro…");
+  const r = await fetch(IA_PROXY_URL, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ provider: c.prov || "gemini", model: modelo, system: sistema, user: usuario })
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j.error && (j.error.message || j.error)) || j.error || ("HTTP " + r.status));
+  return { txt: j.text || j.txt || "", modelo: j.model || modelo };
+}
+
+// Divide a resposta em seções (### títulos) para o cartão do professor
+function medidor(k, corpo) { // barra de incidência do tema (Baixa → Altíssima)
+  if (k !== "info") return "";
+  const m = /(alt[ií]ssima|alta|m[eé]dia|baixa)/i.exec(corpo); if (!m) return "";
+  const w = m[1].toLowerCase(), lv = w.includes("ss") ? 4 : w === "alta" ? 3 : w.startsWith("m") ? 2 : 1;
+  return `<div class="inc l${lv}"><span class="mt"><i></i><i></i><i></i><i></i></span><b>Incidência: ${["", "Baixa", "Média", "Alta", "Altíssima"][lv]}</b></div>`;
+}
+function mdSecoes(t) {
+  const partes = t.split(/^#{1,4}[ \t]*/m);
+  const intro = /^\s*#/.test(t) ? "" : partes.shift();
+  const sec = partes.filter((x) => x.trim()).map((p) => {
+    const i = p.indexOf("\n"), tit = (i < 0 ? p : p.slice(0, i)).trim(), corpo = i < 0 ? "" : p.slice(i + 1).trim();
+    const k = /pegadinha/i.test(tit) ? "warn" : /gabarito/i.test(tit) ? "ok" : /recorr/i.test(tit) ? "info" : /base legal|jurisprud/i.test(tit) ? "law" : "";
+    return `<section class="isec ${k}"><h4>${esc(tit)}</h4>${medidor(k, corpo)}<div class="isb">${mdLite(corpo)}</div></section>`;
+  }).join("");
+  return (intro && intro.trim() ? `<div class="isb">${mdLite(intro.trim())}</div>` : "") + sec;
+}
+
+// Balão exibido logo abaixo da questão
+function iaBolha(L, q) {
+  const e = iaSt[L.id + "|" + q.num];
+  if (!e || !e.open) return "";
+  const corpo = e.estado === "carregando" ? `<div class="isb muted">⏳ ${esc(e.info || "O professor está analisando a questão…")}</div>`
+    : e.estado === "semchave" ? '<div class="isb">Para gerar a explicação aqui dentro do app, configure sua chave de API em <b>⚙️</b> (Google Gemini recomendado).\n\nEnquanto isso, use <b>↗ ChatGPT</b> para abrir o prompt pronto.</div>'
+    : e.estado === "erro" ? `<div class="isb">❌ Não foi possível gerar a explicação: ${esc(e.msg || "")}\n\n<span class="muted">Confira a chave e o modelo em ⚙️.</span></div>`
+    : mdSecoes((L.ia || {})[q.num] || "");
+  return `<div class="iabox"><div class="iahead"><span class="iatitle"><span class="iaav">🎓</span><span><b>Professor FGV · Área Fiscal</b>
+    <small>${e.modelo ? "via " + esc(e.modelo) : "mentor de elite"}</small></span></span><span class="iabtns">
+    <button data-iarege="${q.num}" title="Gerar novamente">🔄</button><button data-iacopy="${q.num}" title="Copiar">📋</button>
+    <button data-iagpt="${q.num}" title="Abrir no ChatGPT">↗ ChatGPT</button><button data-iacfg="1" title="Configurar IA">⚙️</button>
+    <button data-iaclose="${q.num}" title="Fechar">✕</button></span></div><div class="iabody">${corpo}</div></div>`;
+}
+const atualizarBolha = (L, q) => { const el = $("ia-" + q.num); if (el) el.innerHTML = iaBolha(L, q); };
+
+async function abrirIA(L, q, forcar) {
+  const k = L.id + "|" + q.num, e = iaSt[k] || (iaSt[k] = {});
+  if (e.estado === "carregando") return;
+  if (e.open && !forcar) { e.open = false; atualizarBolha(L, q); return; } // clicar de novo recolhe
+  e.open = true;
+  const cache = L.ia && L.ia[q.num];
+  if (cache && !forcar) { e.estado = "ok"; atualizarBolha(L, q); return; } // já gerada (salva na nuvem)
+  const c = cfgIA();
+  if (!c.prov) { e.estado = "semchave"; atualizarBolha(L, q); return; }
+  e.estado = "carregando"; e.info = ""; atualizarBolha(L, q);
+  const el = $("ia-" + q.num); if (el) el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  try {
+    const r = await chamarIA(SISTEMA_IA, dadosQuestao(L, q), c, (m) => { e.info = m; atualizarBolha(L, q); });
+    const txt = r.txt.trim(); e.modelo = r.modelo;
+    L.ia = L.ia || {}; L.ia[q.num] = txt;
+    updateDoc(ref("listas", L.id), { [`ia.${q.num}`]: txt }).catch(falha);
+    e.estado = "ok";
+  } catch (err) { e.estado = "erro"; e.msg = String(err.message || err); }
+  atualizarBolha(L, q);
+}
+
+function iaAcao(k, L, q) {
+  if (k === "ia") abrirIA(L, q);
+  else if (k === "iarege") abrirIA(L, q, true);
+  else if (k === "iaclose") { iaSt[L.id + "|" + q.num].open = false; atualizarBolha(L, q); }
+  else if (k === "iacopy") { if (navigator.clipboard) navigator.clipboard.writeText((L.ia || {})[q.num] || "").catch(() => {}); aviso("Copiado!"); }
+  else if (k === "iagpt") explicarIA(L, q);
+}
+function abrirCfg() {
+  const c = cfgIA(); $("cProv").value = c.prov || "gemini"; $("cModel").value = c.model || "";
+  $("dlgCfg").showModal();
+}
+$("cCancel").onclick = () => $("dlgCfg").close();
+$("formCfg").onsubmit = (e) => {
+  e.preventDefault();
+  localStorage.setItem("ia_cfg", JSON.stringify({ prov: $("cProv").value, model: $("cModel").value.trim() }));
+  $("dlgCfg").close(); aviso("Configuração salva neste aparelho.");
+};
+
+const hue = (n) => { let h = 0; for (const c of (n || "?").toLowerCase()) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
+const SECOES = [["regular", "📘 PDF Regular"], ["passe", "⭐ Passe Estratégico"]];
+
+// Extrai "(FGV / SEFAZ-MG / 2022)" do início do enunciado -> badges de Banca / Ano / Órgão
+function cabecalhoQuestao(enun) {
+  enun = enun || "";
+  const m = /^\s*\(([^)]{3,90})\)\s*/.exec(enun);
+  if (!m) return { resto: enun };
+  const ano = (m[1].match(/\b(?:19|20)\d{2}\b/) || [])[0];
+  if (!ano) return { resto: enun };
+  const toks = m[1].split(/\s*[\/–—]\s*|\s+-\s+/).map((x) => x.trim()).filter(Boolean);
+  const anoTok = (x) => /^(?:19|20)\d{2}$/.test(x);
+  const banca = toks.find((x) => !anoTok(x));
+  if (!banca || !/^[A-Za-zÀ-ú.&\- ]{2,28}$/.test(banca)) return { resto: enun }; // não parece um cabeçalho de banca
+  const orgao = toks.find((x) => !anoTok(x) && x !== banca);
+  return { banca, ano, orgao, resto: enun.slice(m[0].length) };
+}
+
+function cardMateria(sec, r, i) {
+  const at = `data-cs="${sec}" data-ci="${i}"`;
+  return `<div class="mcard"><div class="mtop"><span class="mdot" style="--h:${hue(r.nome)}">${esc((r.nome || "?").trim().charAt(0).toUpperCase())}</span>
+    <input class="mnome" ${at} data-cf="nome" value="${esc(r.nome || "")}" placeholder="Matéria">
+    <button class="ico" data-ler="${sec}|${i}" title="Ler a apostila em PDF (abre na página cadastrada)">📖</button><button class="ico" data-cdel="${sec}|${i}" title="Remover">🗑️</button></div>
+    <div class="mfields">
+      <div class="fld"><label>Apostila / Aula</label><input ${at} data-cf="material" value="${esc(r.material || "")}" placeholder="Ex.: Apostila 8"></div>
+      <div class="fld"><label>Página / Exercício</label><input ${at} data-cf="detalhe" value="${esc(r.detalhe || "")}" placeholder="Ex.: página 32"></div>
+    </div></div>`;
+}
+
+function renderConteudo() {
+  const el = $("secConteudo");
+  if (!conteudo) { el.innerHTML = '<p class="muted">Carregando...</p>'; return; }
+  el.innerHTML = `<div class="ctop"><div><h2>Conteúdo</h2><span id="saveStatus" class="savechip">Sincronizado</span></div>
+    <span class="ctopbtns"><button class="ghost" data-ler="top">Ler apostila (PDF)</button><button class="addbig" data-cadd="top">Adicionar matéria</button></span></div>
+    <div class="retomar-slot" data-ctx="conteudo">${retomarHTML("conteudo")}</div>` +
+    SECOES.map(([sec, titulo]) => {
+      const lista = conteudo[sec] || [];
+      return `<div class="secblock ${sec}"><div class="sechead"><b>${titulo}</b><span class="count">${lista.length}</span></div>
+        <div class="mgrid">${lista.map((r, i) => cardMateria(sec, r, i)).join("") || '<p class="muted">Nenhuma matéria nesta seção.</p>'}</div>
+        <button class="addsec" data-cadd="${sec}">Adicionar em ${titulo.replace(/^\S+\s/, "")}</button></div>`;
+    }).join("");
+}
+
+// Matérias disponíveis para o cronograma (Conteúdo + Questões + já usadas), sem repetir
+function poolMaterias() {
+  const m = new Map();
+  const add = (n) => { n = (n || "").trim(); if (n && !m.has(n.toLowerCase())) m.set(n.toLowerCase(), n); };
+  [...(conteudo?.regular || []), ...(conteudo?.passe || []), ...materias].forEach((x) => add(x.nome));
+  (cron?.ciclos || []).forEach((c) => Object.values(c.dias || {}).flat().forEach(add));
+  return [...m.values()].sort((a, b) => a.localeCompare(b, "pt-BR", { sensitivity: "base" }));
+}
+const cicloAtivo = () => cron.ciclos.find((x) => x.id === cron.ativo) || cron.ciclos[0];
+
+function renderCron() {
+  atualizarPerfil();
+  const el = $("secCronograma");
+  if (!cron) { el.innerHTML = '<p class="muted">Carregando...</p>'; return; }
+  const c = cicloAtivo(), pool = poolMaterias();
+  const hoje = ["dom", "seg", "ter", "qua", "qui", "sex", "sab"][new Date().getDay()];
+  el.innerHTML = `<div class="ctop"><h2>Cronograma</h2></div>
+    <div class="kbar"><div class="tabs">${cron.ciclos.map((x) => `<button class="tab ${x.id === c.id ? "on" : ""}" data-kc="${x.id}">${esc(x.nome)}</button>`).join("")}
+      <button class="tab add" data-knovo="1">Novo ciclo</button></div>
+      <div class="kact"><button data-kren="1">Renomear</button><button data-kdel="1" ${cron.ciclos.length < 2 ? "disabled" : ""}>Excluir</button></div></div>
+    <div class="kgrid">` + DIAS.map(([k, nome]) => {
+      const ms = (c.dias && c.dias[k]) || [], desc = !ms.length;
+      const livres = pool.filter((n) => !ms.some((x) => x.toLowerCase() === n.toLowerCase()));
+      return `<div class="kdia ${k === hoje ? "hoje" : ""} ${desc ? "descanso" : ""}">
+        <div class="khead"><span class="kico">${desc ? "😴" : "📅"}</span><b>${nome.replace("-feira", "")}</b>${k === hoje ? '<span class="tag">Hoje</span>' : ""}
+          <span class="kcount">${desc ? "Descanso" : ms.length + (ms.length > 1 ? " matérias" : " matéria")}</span></div>
+        <div class="kbody">${desc ? '<p class="muted">Dia livre para recarregar as energias.</p>' :
+          `<div class="chips">${ms.map((n, i) => `<span class="pill" style="--h:${hue(n)}"><span>${esc(n)}</span><button data-krem="${k}|${i}" title="Remover">✕</button></span>`).join("")}</div>`}
+          <select data-kadd="${k}"><option value="">Adicionar matéria…</option>${livres.map((n) => `<option>${esc(n)}</option>`).join("")}
+          <option value="__novo__">✏️ Outra (digitar)…</option></select></div></div>`;
+    }).join("") + "</div>";
+}
+
+
+// ---------- Continuar de onde parei ----------
+// Guarda o último ponto de estudo (questão respondida, página lida no leitor ou página anotada em Conteúdo).
+// Fica no aparelho (localStorage "ultimo_estudo") e também em users/{uid}/config/progresso para aparecer nos outros aparelhos.
+// É um registro novo e separado: não altera Conteúdo, Cronograma, listas nem matérias.
+const PROG_KEY = "ultimo_estudo";
+let progresso = (() => { try { return JSON.parse(localStorage.getItem(PROG_KEY) || "null"); } catch (e) { return null; } })();
+let tProg, apMeta = null, retomarAp = null;
+const progAtual = () => (progresso && user && (!progresso.uid || progresso.uid === user.uid) ? progresso : null);
+function registrarProgresso(p) {
+  progresso = { ...p, uid: (user && user.uid) || "", ts: Date.now() };
+  try { localStorage.setItem(PROG_KEY, JSON.stringify(progresso)); } catch (e) { /* armazenamento cheio: segue só na memória */ }
+  clearTimeout(tProg);
+  tProg = setTimeout(() => { if (user) setDoc(cfgRef("progresso"), progresso).catch((e) => console.warn("progresso:", e.message)); }, 1200);
+  atualizarRetomar();
+}
+const quando = (ts) => {
+  const s = Math.round((Date.now() - (ts || 0)) / 1000);
+  if (s < 60) return "agora há pouco";
+  if (s < 3600) return `há ${Math.floor(s / 60)} min`;
+  if (s < 86400) return `há ${Math.floor(s / 3600)} h`;
+  const d = Math.floor(s / 86400); return d === 1 ? "ontem" : `há ${d} dias`;
+};
+const proximaQuestao = (L, n) => { const nx = L.questoes.find((q) => q.num > n && status(L, q) === "branco"); return nx ? nx.num : n; };
+function localizarCtx(p) { // posição atual da matéria em Conteúdo (a lista pode ter sido reordenada)
+  if (!conteudo) return null;
+  if (conteudo[p.sec] && conteudo[p.sec][p.i] && sem(conteudo[p.sec][p.i].nome) === sem(p.nome)) return `${p.sec}|${p.i}`;
+  for (const sec of ["regular", "passe"]) { const i = (conteudo[sec] || []).findIndex((r) => sem(r.nome) === sem(p.nome)); if (i >= 0) return `${sec}|${i}`; }
+  return null;
+}
+function retomarHTML(ctx) {
+  const p = progAtual();
+  if (!p) return ctx !== "conteudo" ? "" : `<div class="retomar vazio"><div><div class="rt-tit sm">Continuar de onde parei</div>
+    <div class="rt-det">Responda uma questão, abra uma apostila no leitor ou anote a página de uma matéria abaixo. O último ponto de estudo aparece aqui.</div></div></div>`;
+  let mat = "", tit = "", det = "", btn = "Retomar", pct = null, nota = "";
+  if (p.tipo === "questoes") {
+    const L = listas.find((l) => l.id === p.lista), m = materias.find((x) => x.id === (L ? L.materia : p.materia));
+    mat = (m && m.nome) || p.materiaNome || ""; tit = (L && L.nome) || p.listaNome || "Lista de questões";
+    if (L && L.questoes.length) {
+      const tot = L.questoes.length, c = contar(L, L.questoes), resp = tot - c.branco, nx = proximaQuestao(L, p.questao);
+      det = `Parou na questão ${p.questao} de ${L.questoes[tot - 1].num}. ${resp} respondidas.`;
+      pct = (resp / tot) * 100; btn = nx !== p.questao ? `Retomar na questão ${nx}` : `Ir para a questão ${nx}`;
+    } else if (!listas.length) { det = `Parou na questão ${p.questao}.`; btn = ""; }
+    else { det = "Esta lista foi excluída."; btn = ""; }
+  } else if (p.tipo === "apostila") {
+    mat = p.nome || ""; tit = p.material || p.titulo || p.arquivo || "Apostila";
+    det = `Página ${p.pagina}${p.total ? ` de ${p.total}` : ""}`; pct = p.total ? (p.pagina / p.total) * 100 : null;
+    btn = `Retomar na página ${p.pagina}`;
+    if (!(apPdf && apArq && apArq.name === p.arquivo)) nota = `Ao retomar, selecione o arquivo ${p.arquivo || "da apostila"}: o navegador não guarda o PDF entre sessões.`;
+  } else {
+    mat = p.nome || ""; tit = p.material || "Apostila"; det = p.detalhe ? `Parou em: ${p.detalhe}` : "Sem página anotada"; btn = "Abrir apostila";
+  }
+  return `<div class="retomar"><div class="rt-top"><b>Continuar de onde parei</b><span>${quando(p.ts)}</span></div>
+    <div class="rt-main">${mat ? `<div class="rt-mat">${esc(String(mat))}</div>` : ""}<div class="rt-tit">${esc(String(tit))}</div><div class="rt-det">${esc(det)}</div></div>
+    ${btn ? `<button class="pri rt-btn" data-retomar="1">${esc(btn)}</button>` : ""}${nota ? `<div class="rt-nota">${esc(nota)}</div>` : ""}
+    ${pct !== null ? `<div class="rt-prog" aria-hidden="true"><i style="width:${Math.min(100, Math.max(2, pct)).toFixed(1)}%"></i></div>` : ""}</div>`;
+}
+function atualizarRetomar() { document.querySelectorAll(".retomar-slot").forEach((e) => { e.innerHTML = retomarHTML(e.dataset.ctx); }); }
+function retomar() {
+  const p = progAtual(); if (!p) return;
+  if (p.tipo === "questoes") {
+    const L = listas.find((l) => l.id === p.lista); if (!L) return aviso("Essa lista não existe mais.");
+    const alvo = proximaQuestao(L, p.questao), maxN = L.questoes[L.questoes.length - 1].num;
+    sel = { materia: L.materia, lista: L.id };
+    if (!visiveis(L).some((q) => q.num === alvo)) { // abre o bloco que contém a questão, sem filtro
+      filtro = "todas"; const ini = Math.floor((alvo - 1) / TAM) * TAM + 1; faixa = { de: ini, ate: Math.min(ini + TAM - 1, maxN) };
+    }
+    saveUi(); mostrarSecao("questoes");
+    requestAnimationFrame(() => {
+      const el = document.querySelector(`.card.q[data-qn="${alvo}"]`); if (!el) return;
+      el.scrollIntoView({ behavior: "smooth", block: "start" }); el.classList.add("pulse"); setTimeout(() => el.classList.remove("pulse"), 1800);
+    });
+  } else if (p.tipo === "apostila") {
+    if (apPdf && apArq && apArq.name === p.arquivo) { if (!$("dlgLeitor").open) $("dlgLeitor").showModal(); mostrarPaginaApostila(p.pagina); return; }
+    apCtx = localizarCtx(p) || "top"; retomarAp = { pag: p.pagina, tit: p.titulo };
+    $("apFile").value = ""; $("apFile").click();
+  } else {
+    apCtx = localizarCtx(p); retomarAp = null;
+    if (!apCtx) { aviso("Essa matéria não está mais em Conteúdo."); return mostrarSecao("conteudo"); }
+    $("apFile").value = ""; $("apFile").click();
+  }
+}
+
+document.addEventListener("click", (e) => {
+  const t = e.target, d = (k) => t.closest(`[data-${k}]`)?.dataset[k];
+  if (d("retomar")) return retomar();
+  if (d("sec")) return mostrarSecao(d("sec"));
+  if (d("ler")) { apCtx = d("ler"); $("apFile").value = ""; $("apFile").click(); return; } // escolhe o PDF da apostila
+  if (d("abrirmat")) { renderMaterias(); $("dlgMaterias").showModal(); return; }
+  if (d("rm")) { // renomear matéria
+    const m = materias.find((x) => x.id === d("rm")); if (!m) return;
+    const nome = (prompt("Novo nome da matéria:", m.nome) || "").trim();
+    if (!nome || nome === m.nome) return;
+    if (materias.some((x) => x.id !== m.id && x.nome.toLowerCase() === nome.toLowerCase())) return alert("Já existe uma matéria com esse nome.");
+    m.nome = nome; updateDoc(ref("materias", m.id), { nome }).catch(falha); render();
+    return;
+  }
+  const ik = ["ia", "iarege", "iaclose", "iacopy", "iagpt"].find((k) => d(k));
+  if (ik) {
+    const L = listaAtual(), q = L && L.questoes.find((x) => String(x.num) === d(ik));
+    if (q) iaAcao(ik, L, q);
+    return;
+  }
+  if (d("iacfg")) return abrirCfg();
+  if (conteudo && d("cadd")) {
+    abrirDlg(d("cadd"));
+  } else if (conteudo && d("cdel")) {
+    const [sec, i] = d("cdel").split("|"), r = conteudo[sec][+i];
+    if (!confirm(`Remover "${r.nome}"?`)) return;
+    conteudo[sec].splice(+i, 1); salvarConteudo(); renderConteudo();
+  } else if (cron && d("kc")) { cron.ativo = d("kc"); salvarCron(); renderCron(); }
+  else if (cron && d("knovo")) {
+    const nome = (prompt("Nome do novo ciclo:", `Ciclo ${cron.ciclos.length + 1}`) || "").trim();
+    if (!nome) return;
+    const id = "c" + Date.now();
+    cron.ciclos.push({ id, nome, dias: { seg: [], ter: [], qua: [], qui: [], sex: [], sab: [], dom: [] } });
+    cron.ativo = id; salvarCron(); renderCron();
+  } else if (cron && d("kren")) {
+    const c = cicloAtivo(), nome = (prompt("Novo nome do ciclo:", c.nome) || "").trim();
+    if (nome) { c.nome = nome; salvarCron(); renderCron(); }
+  } else if (cron && d("kdel")) {
+    if (cron.ciclos.length < 2 || !confirm("Excluir este ciclo?")) return;
+    cron.ciclos = cron.ciclos.filter((x) => x.id !== cicloAtivo().id);
+    cron.ativo = cron.ciclos[0].id; salvarCron(); renderCron();
+  } else if (cron && d("krem")) {
+    const [dia, i] = d("krem").split("|");
+    cicloAtivo().dias[dia].splice(+i, 1); salvarCron(); renderCron();
+  }
+});
+
+document.addEventListener("change", (e) => {
+  const t = e.target;
+  if (t.id === "apFile") { // abre a apostila escolhida na página cadastrada
+    const f = t.files[0]; if (!f) return;
+    let pag = 1, tit = f.name; apMeta = null;
+    if (apCtx && apCtx !== "top" && conteudo) {
+      const [sec, i] = apCtx.split("|"), r = conteudo[sec][+i];
+      pag = +((/p[áa]g(?:ina)?s?\.?\s*(\d+)/i.exec(r.detalhe || "") || [])[1] || 1);
+      tit = `${r.nome} — ${r.material || f.name}`;
+      apMeta = { sec, i: +i, nome: r.nome || "", material: r.material || "" };
+    }
+    if (retomarAp) { pag = retomarAp.pag || pag; if (!apMeta && retomarAp.tit) tit = retomarAp.tit; retomarAp = null; }
+    abrirApostila(f, pag, tit);
+    return;
+  }
+  if (conteudo && t.dataset.cf) { // edição de apostila/página/nome
+    conteudo[t.dataset.cs][+t.dataset.ci][t.dataset.cf] = t.value.trim();
+    clearTimeout(tSalvar); salvarConteudo();
+    const rr = conteudo[t.dataset.cs][+t.dataset.ci];
+    registrarProgresso({ tipo: "conteudo", sec: t.dataset.cs, i: +t.dataset.ci, nome: rr.nome || "", material: rr.material || "", detalhe: rr.detalhe || "" });
+  } else if (cron && t.dataset.kadd) { // escolher matéria do dia
+    let nome = t.value;
+    if (nome === "__novo__") nome = (prompt("Nome da matéria:") || "").trim();
+    if (nome) {
+      const c = cicloAtivo();
+      if (!c.dias[t.dataset.kadd]) c.dias[t.dataset.kadd] = [];
+      c.dias[t.dataset.kadd].push(nome);
+      salvarCron();
+    }
+    renderCron();
+  }
+});
+
+$("dmFechar").onclick = () => $("dlgMaterias").close();
+document.addEventListener("input", (e) => { // busca de matérias (sidebar e janela)
+  const t = e.target;
+  if (t.id === "buscaMat" || t.id === "buscaMat2") {
+    matFiltro = t.value; renderMaterias();
+    ["buscaMat", "buscaMat2"].forEach((id) => { const x = $(id); if (x && x !== t) x.value = matFiltro; });
+  }
+});
+// Atualização em tempo real: salva 0,7 s depois de parar de digitar
+let tSalvar;
+document.addEventListener("input", (e) => {
+  const t = e.target;
+  if (conteudo && t.dataset.cf) {
+    conteudo[t.dataset.cs][+t.dataset.ci][t.dataset.cf] = t.value;
+    const st = $("saveStatus"); if (st) st.textContent = "Salvando…";
+    clearTimeout(tSalvar); tSalvar = setTimeout(salvarConteudo, 700);
+  }
+});
+
+// Diálogo "Nova matéria"
+function abrirDlg(sec) {
+  $("formDlg").reset(); $("dSec").value = sec === "passe" ? "passe" : "regular";
+  $("dlgMateria").showModal(); $("dNome").focus();
+}
+$("dCancel").onclick = () => $("dlgMateria").close();
+$("formDlg").onsubmit = (e) => {
+  e.preventDefault();
+  const nome = $("dNome").value.trim(), sec = $("dSec").value;
+  if (!nome || !conteudo) return;
+  if (!conteudo[sec]) conteudo[sec] = [];
+  conteudo[sec].push(R(nome, $("dMat").value.trim(), $("dDet").value.trim()));
+  $("dlgMateria").close(); salvarConteudo(); renderConteudo();
+};
+
+// ---------- Sidebar: perfil, status do ciclo e recolher ----------
+function atualizarPerfil() {
+  const nome = (user && (user.displayName || user.email)) || "";
+  $("avatar").textContent = nome.charAt(0).toUpperCase() || "?";
+  let st = "Carregando ciclo…";
+  if (cron) {
+    const c = cicloAtivo(), k = ["dom", "seg", "ter", "qua", "qui", "sex", "sab"][new Date().getDay()];
+    const ms = (c.dias && c.dias[k]) || [], dn = DIAS.find((d) => d[0] === k)[1].replace("-feira", "");
+    st = ms.length ? `${c.nome} · Hoje (${dn}): ${ms.join(", ")}` : `${c.nome} · Hoje (${dn}): descanso 😴`;
+  }
+  $("statusCiclo").textContent = st;
+}
+if (localStorage.getItem("side_col") === "1") $("app").classList.add("col");
+$("colapsar").onclick = () => {
+  $("app").classList.toggle("col");
+  localStorage.setItem("side_col", $("app").classList.contains("col") ? "1" : "0");
+};
+
+// ---------- Autenticação + sincronização em tempo real ----------
+const msgErro = (e) => ({
+  "auth/invalid-credential": "E-mail ou senha incorretos.",
+  "auth/wrong-password": "E-mail ou senha incorretos.",
+  "auth/user-not-found": "Conta não encontrada. Use “Criar conta”.",
+  "auth/invalid-email": "E-mail inválido.",
+  "auth/email-already-in-use": "Este e-mail já tem conta. Use “Entrar”.",
+  "auth/weak-password": "A senha precisa ter pelo menos 6 caracteres.",
+  "auth/too-many-requests": "Muitas tentativas. Aguarde um pouco e tente de novo.",
+  "auth/network-request-failed": "Sem conexão com a internet.",
+  "auth/operation-not-allowed": "Ative o login por E-mail/senha no Firebase (Authentication)."
+}[e.code] || e.message);
+
+async function autenticar(criar) {
+  $("erroLogin").textContent = "";
+  try {
+    // "Lembrar de mim": sessão guardada no aparelho; desmarcado = termina ao fechar o navegador
+    await setPersistence(auth, $("lembrar").checked ? browserLocalPersistence : browserSessionPersistence);
+    const fn = criar ? createUserWithEmailAndPassword : signInWithEmailAndPassword;
+    await fn(auth, $("email").value.trim(), $("senha").value);
+  } catch (e) { $("erroLogin").textContent = msgErro(e); }
+}
+$("formLogin").onsubmit = (e) => { e.preventDefault(); autenticar(false); };
+$("btnCriar").onclick = () => { if ($("formLogin").reportValidity()) autenticar(true); };
+$("btnReset").onclick = async () => {
+  const email = $("email").value.trim();
+  if (!email) { $("erroLogin").textContent = "Digite seu e-mail acima primeiro."; return; }
+  try { await sendPasswordResetEmail(auth, email); $("erroLogin").textContent = "Enviamos um e-mail para redefinir a senha."; }
+  catch (e) { $("erroLogin").textContent = msgErro(e); }
+};
+$("sair").onclick = () => signOut(auth);
+
+onAuthStateChanged(auth, (u) => {
+  unsubs.forEach((f) => f()); unsubs = [];
+  user = u; materias = []; listas = []; conteudo = null; cron = null;
+  $("login").hidden = !!u; $("app").hidden = !u; $("conta").hidden = !u;
+  $("usuario").textContent = u ? u.displayName || u.email : ""; atualizarPerfil();
+  if (!u) return;
+  unsubs.push(onSnapshot(col("materias"), (s) => {
+    materias = s.docs.map((d) => ({ id: d.id, ...d.data() })); render(); atualizarDiag();
+  }, falha));
+  unsubs.push(onSnapshot(col("listas"), (s) => {
+    const n = s.docs.map((d) => ({ id: d.id, ...d.data() }));
+    if (sig(n) === sig(listas)) return; // já refletido localmente: evita redesenhar/pular a tela
+    listas = n; render(); atualizarDiag();
+  }, falha));
+  // Conteúdo e Cronograma: cria os dados iniciais na primeira vez (somente após confirmar com o servidor)
+  unsubs.push(onSnapshot(cfgRef("conteudo"), (s) => {
+    if (!s.exists()) { if (!s.metadata.fromCache) { conteudo = structuredClone(SEED_CONT); salvarConteudo(); renderConteudo(); } return; }
+    if (conteudo && canon(s.data()) === canon(conteudo)) return; // já refletido localmente
+    conteudo = s.data(); if (secao === "conteudo") renderConteudo(); else if (secao === "cronograma") renderCron(); else if (secao === "diagnostico") renderDiag();
+  }, falha));
+  unsubs.push(onSnapshot(cfgRef("cronograma"), (s) => {
+    if (!s.exists()) { if (!s.metadata.fromCache) { cron = structuredClone(SEED_CRON); salvarCron(); renderCron(); } return; }
+    if (cron && canon(s.data()) === canon(cron)) return;
+    cron = s.data(); atualizarPerfil(); if (secao === "cronograma") renderCron();
+  }, falha));
+  unsubs.push(onSnapshot(cfgRef("progresso"), (s) => {
+    if (!s.exists()) return;
+    const r = s.data();
+    if (!progAtual() || (r.ts || 0) > (progresso.ts || 0)) {
+      progresso = r; try { localStorage.setItem(PROG_KEY, JSON.stringify(r)); } catch (e) { /* ignora */ }
+      atualizarRetomar();
+    }
+  }, (e) => console.warn("progresso:", e.message)));
+  mostrarSecao(secao);
+});
+
+// ---------- Eventos ----------
+document.addEventListener("click", async (e) => {
+  const t = e.target, d = (k) => t.closest(`[data-${k}]`)?.dataset[k], L = listaAtual();
+  const upd = (obj) => updateDoc(ref("listas", L.id), obj).catch(falha);
+  if (d("x")) { // ✂️ descartar/restaurar alternativa (salvo na nuvem)
+    const [n, k] = d("x").split("|");
+    L.riscadas = L.riscadas || {};
+    const cs = new Set((L.riscadas[n] || "").split("").filter(Boolean));
+    if (cs.has(k)) cs.delete(k); else cs.add(k);
+    const str = [...cs].sort().join("");
+    if (str) L.riscadas[n] = str; else delete L.riscadas[n];
+    upd({ [`riscadas.${n}`]: str || deleteField() });
+    t.closest(".altrow").classList.toggle("cut", cs.has(k));
+  } else if (d("dl")) {
+    if (confirm("Excluir esta lista?")) deleteDoc(ref("listas", d("dl"))).catch(falha);
+  } else if (d("rn")) { renomearLista(d("rn")); }
+  else if (d("l")) { sel.lista = d("l"); saveUi(); render(); }
+  else if (d("m")) { sel = { materia: d("m"), lista: null }; if ($("dlgMaterias").open) $("dlgMaterias").close(); mostrarSecao("questoes"); }
+  else if (t.closest("#novaMat, [data-novamat]")) {
+    if ($("dlgMaterias").open) $("dlgMaterias").close();
+    const nome = (prompt("Nome da nova matéria:") || "").trim();
+    if (!nome) return;
+    if (materias.some((m) => m.nome.toLowerCase() === nome.toLowerCase())) return alert("Essa matéria já existe.");
+    try { const r = await addDoc(col("materias"), { nome, criado: Date.now() }); sel = { materia: r.id, lista: null }; saveUi(); mostrarSecao("questoes"); }
+    catch (err) { falha(err); }
+  } else if (d("dm")) {
+    if (!confirm("Excluir esta matéria e todas as suas listas?")) return;
+    const b = writeBatch(fs);
+    listas.filter((l) => l.materia === d("dm")).forEach((l) => b.delete(ref("listas", l.id)));
+    b.delete(ref("materias", d("dm")));
+    b.commit().catch(falha);
+  } else if (d("f")) { filtro = d("f"); saveUi(); render(); }
+  else if (d("de")) { faixa = { de: +d("de"), ate: +t.closest("[data-de]").dataset.ate }; saveUi(); render(); }
+  else if (d("rq")) {
+    const n = d("rq");
+    L.respostas = L.respostas || {}; L.corrigidas = L.corrigidas || {}; L.riscadas = L.riscadas || {};
+    delete L.respostas[n]; delete L.corrigidas[n]; delete L.riscadas[n];
+    upd({ [`respostas.${n}`]: deleteField(), [`corrigidas.${n}`]: deleteField(), [`riscadas.${n}`]: deleteField() });
+    render();
+  } else if (t.id === "corrigir") { // corrige só as marcadas entre as exibidas
+    const o = {};
+    pendentesTela(L).forEach((q) => { L.corrigidas[q.num] = true; o[`corrigidas.${q.num}`] = true; });
+    upd(o); render();
+  } else if (t.id === "refazer") {
+    if (!confirm("Apagar todas as respostas desta lista?")) return;
+    L.respostas = {}; L.corrigidas = {}; L.riscadas = {}; upd({ respostas: {}, corrigidas: {}, riscadas: {} }); render();
+  }
+});
+
+document.addEventListener("click", async (e) => {
+  const t = e.target.closest('input[type="radio"][data-q]');
+  if (!t || !t.dataset.q) return;
+  const L = listaAtual();
+  // Questão corrigida: o radio está desabilitado no HTML e não pode ser alterado.
+  if (L?.corrigidas?.[t.dataset.q]) {
+    e.preventDefault();
+    return;
+  }
+  // Radio normalmente não permite desmarcar clicando novamente. Fazemos isso manualmente.
+  const atual = L?.respostas?.[t.dataset.q];
+  if (atual === t.value) {
+    e.preventDefault();
+    t.checked = false;
+    delete L.respostas[t.dataset.q];
+    updateDoc(ref("listas", L.id), { [`respostas.${t.dataset.q}`]: deleteField() }).catch(falha);
+    t.closest(".q").querySelectorAll(".altrow").forEach((r) => r.classList.remove("sel"));
+    $("rel").innerHTML = relatorio(L);
+    atualizarBotao(L);
+    atualizarLinha(L);
+  }
+});
+
+document.addEventListener("change", async (e) => {
+  const t = e.target;
+  if (t.dataset.q) { // marcou alternativa: atualiza na tela e grava na nuvem
+    const L = listaAtual();
+    // Segurança extra: uma questão corrigida nunca pode ser alterada sem "refazer".
+    if (L?.corrigidas?.[t.dataset.q]) return;
+    L.respostas = L.respostas || {};
+    L.respostas[t.dataset.q] = t.value;
+    t.closest(".q").querySelectorAll(".altrow").forEach((r) => r.classList.toggle("sel", r.contains(t)));
+    updateDoc(ref("listas", L.id), { [`respostas.${t.dataset.q}`]: t.value }).catch(falha);
+    $("rel").innerHTML = relatorio(L);
+    atualizarBotao(L);
+    atualizarLinha(L);
+    registrarProgresso({ tipo: "questoes", materia: L.materia || "", lista: L.id, questao: +t.dataset.q,
+      listaNome: L.nome || "", materiaNome: ((materias.find((m) => m.id === L.materia)) || {}).nome || "" });
+  } else if (t.id === "leitorPdf") {
+    localStorage.setItem("leitor_pdf", t.value);
+  } else if (t.id === "de" || t.id === "ate") {
+    faixa = { de: Math.max(1, +$("de").value || 1), ate: +$("ate").value || 9999 }; saveUi(); render();
+  } else if (t.id === "pdf") {
+    const st = $("status"); statusImport = "";
+    for (const f of t.files) {
+      st.textContent = `Processando ${f.name}...`;
+      try {
+        const { id, ...l } = await lerPDF(f, (m) => { st.textContent = m; });
+        if (JSON.stringify(l).length > 900000) throw new Error("PDF grande demais para um documento do Firestore (limite ~1 MB).");
+        const r = await addDoc(col("listas"), { ...l, materia: sel.materia, criado: Date.now() });
+        sel.lista = r.id; saveUi();
+        const nt = l.questoes.reduce((a, q) => a + ((q.tabelas && q.tabelas.length) || 0), 0);
+        statusImport += `✅ ${f.name}: ${l.paginas ? l.paginas + " pág. · " : ""}${l.leitor ? "lido por " + l.leitor + " · " : ""}${l.questoes.length} questões · ${Object.keys(l.gabarito).length} no gabarito · ${nt} tabelas\n`;
+        if (!l.questoes.length) statusImport += "⚠️ Nenhuma questão identificada. Veja o texto lido abaixo (e me envie um trecho para ajustar o leitor).\n";
+        else if (Object.keys(l.gabarito).length < l.questoes.length) statusImport += "⚠️ O gabarito tem menos respostas que questões: confira o final do PDF.\n";
+      } catch (err) { console.error(err); statusImport += `❌ ${f.name}: ${err.message}\n`; }
+    }
+    render();
+  }
+});
+</script>
+</body>
+</html>
