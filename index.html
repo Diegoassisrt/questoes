@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Área fiscal">
+<meta name="theme-color" content="#ffffff" id="metaTema">
+<script>try{var _p=localStorage.getItem("paleta_v2")||"roxobranco",_h=document.documentElement;if(_p==="roxo"||_p==="roxobranco")_h.setAttribute("data-paleta",_p);else if(_p==="verde-escuro")_h.setAttribute("data-tema","escuro");var _m=document.getElementById("metaTema");if(_m)_m.content=_p==="roxo"?"#06050d":_p==="roxobranco"?"#faf9ff":_p==="verde-escuro"?"#0b1512":"#ffffff"}catch(e){}</script>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..700&family=Sora:wght@500..800&family=Source+Serif+4:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/temas.css">
+<link rel="stylesheet" href="css/design.css">
+</head>
+<body>
+<section id="login" class="login2">
+  <div class="lg-hero">
+    <i class="lg-blob b1"></i><i class="lg-blob b2"></i>
+    <svg class="lg-deco" viewBox="0 0 200 160" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path pathLength="1" d="M100 44C80 32 46 32 20 40V124C46 116 80 116 100 128Z"/><path pathLength="1" d="M100 44C120 32 154 32 180 40V124C154 116 120 116 100 128Z"/><path pathLength="1" d="M100 44V128"/><path pathLength="1" d="M38 58C54 55 70 56 84 61M38 74C54 71 70 72 84 77M116 61C130 56 146 55 162 58M116 77C130 72 146 71 162 74"/><g class="lg-spark"><path d="M150 18V32M143 25H157"/><path d="M176 6V14M172 10H180"/><path d="M26 18V26M22 22H30"/></g></svg>
+    <div class="lg-brand"><img src="icons/icon-192.png" width="46" height="46" alt=""><span>Área fiscal</span></div>
+    <h1><span>Seu estudo,</span> <span>organizado.</span></h1>
+    <figure class="lg-quote" aria-live="polite"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h4v4c0 3-1.5 5-4 6M15 7h4v4c0 3-1.5 5-4 6"/></svg><div><blockquote id="lgFrase"></blockquote><div class="lg-dots" id="lgDots" aria-hidden="true"></div></div></figure>
+    <div class="lg-chips" aria-hidden="true">
+      <span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h9"/></svg>Questões</span>
+      <span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v5h-5"/></svg>Revisões</span>
+      <span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h11a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6z"/><path d="M6 3v18M10 8h5M10 12h5"/></svg>Caderno de erros</span>
+      <span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9.5 2.5h5"/></svg>Simulados</span>
+    </div>
+    <div class="lg-mock" aria-hidden="true"><div><small>META DO DIA</small><b>12<i> de 20</i></b></div>
+      <svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="26" fill="none" stroke="rgba(255,255,255,.2)" stroke-width="7"/><circle class="lg-ringp" cx="32" cy="32" r="26" fill="none" stroke="#ffb347" stroke-width="7" stroke-linecap="round" stroke-dasharray="98 163.4" transform="rotate(-90 32 32)"/><text x="32" y="37" text-anchor="middle">60%</text></svg></div>
+  </div>
+  <div class="lg-side"><div class="lg-card">
+    <h2>Entrar</h2><p class="muted lsubt">Use o seu e-mail e senha.</p>
+    <form id="formLogin">
+      <label class="lg-field"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3.5 7l8.5 6 8.5-6"/></svg><input type="email" id="email" placeholder="E-mail" autocomplete="username" required></label>
+      <label class="lg-field"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="3"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg><input type="password" id="senha" placeholder="Senha (mín. 6 caracteres)" autocomplete="current-password" minlength="6" required><button type="button" class="lg-eye" aria-label="Mostrar senha"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button></label>
+      <label class="lembrar"><input type="checkbox" id="lembrar" checked> Lembrar de mim neste aparelho</label>
+      <button class="pri" id="btnEntrar">Entrar</button>
+      <button type="button" id="btnCriar">Criar conta</button>
+      <button type="button" id="btnReset" class="link">Esqueci minha senha</button>
+      <p id="erroLogin" class="erro"></p>
+    </form></div></div>
+</section>
+<div id="app" hidden>
+  <aside id="side">
+    <div class="sbrand"><span class="logo"><svg viewBox="0 0 512 512" aria-hidden="true" stroke="none"><g transform="rotate(-12 256 256)"><rect x="132" y="96" width="220" height="300" rx="28" fill="#fff" fill-opacity=".55"/></g><g transform="rotate(5 256 256)"><rect x="168" y="112" width="220" height="300" rx="28" fill="#fff"/><g fill="#1f9468"><circle cx="168" cy="152" r="15"/><circle cx="168" cy="200" r="15"/><circle cx="168" cy="248" r="15"/><circle cx="168" cy="296" r="15"/><circle cx="168" cy="344" r="15"/><circle cx="168" cy="392" r="15"/><rect x="250" y="170" width="100" height="14" rx="7"/><rect x="250" y="212" width="100" height="14" rx="7" opacity=".4"/><rect x="250" y="254" width="100" height="14" rx="7" opacity=".4"/><rect x="250" y="296" width="60" height="14" rx="7" opacity=".4"/></g></g></svg></span><span class="bt">Área fiscal</span></div>
+    <div id="conta" hidden style="display:none"><span id="avatar"></span><b id="usuario"></b><small id="statusCiclo"></small></div>
+    <nav id="menu">
+      <button class="mi on" data-sec="inicio" title="Início"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10.5V20h14v-9.5"/><path d="M9 20v-5h6v5"/></svg><span class="lb">Início</span></button>
+      <button class="mi" data-sec="conteudo" title="Conteúdo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"/><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"/></svg><span class="lb">Conteúdo</span></button>
+      <button class="mi" data-sec="questoes" title="Questões"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h9"/></svg><span class="lb">Questões</span></button>
+      <button class="mi" data-sec="diagnostico" title="Diagnóstico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg><span class="lb">Diagnóstico</span></button>
+      <button class="mi" data-sec="caderno" title="Caderno de erros"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h12v16H6z"/><path d="M9 8h6M9 12h6M9 16h4"/></svg><span class="lb">Caderno de erros</span></button>
+      <button class="mi" data-sec="revisao" title="Revisão"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h6"/><path d="M16 16l2 2 3-3"/></svg><span class="lb">Revisão</span></button>
+      <button class="mi" data-sec="simulado" title="Simulado"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9.5 2.5h5"/></svg><span class="lb">Simulado</span></button>
+    </nav>
+    <div class="matbox">
+      <div class="mathead"><span>Matérias</span><button id="novaMat" data-novamat="1" title="Nova matéria">＋</button></div>
+      <input id="buscaMat" placeholder="Buscar matéria…" autocomplete="off">
+      <div id="listaMaterias" class="matlist"></div>
+    </div>
+    <div class="sfoot"><button id="colapsar" title="Recolher / expandir menu"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/></svg><span class="lb">Recolher</span></button></div>
+  </aside>
+  <div class="conteudo">
+    <section id="secInicio"><div id="painelInicio"></div></section>
+    <section id="secQuestoes" hidden><div id="painel"></div></section>
+    <section id="secDiagnostico" hidden></section>
+    <section id="secCaderno" hidden></section>
+    <section id="secConteudo" hidden></section>
+    <section id="secRevisao" hidden></section>
+    <section id="secSimulado" hidden></section>
+    <section id="secCronograma" hidden></section>
+  </div>
+</div>
+<dialog id="dlgMateria"><form id="formDlg" method="dialog">
+  <h3>Nova matéria</h3>
+  <input id="dNome" placeholder="Nome da matéria" required>
+  <select id="dSec"><option value="regular">📘 PDF Regular</option><option value="passe">⭐ Passe Estratégico</option></select>
+  <div class="dgrid"><input id="dMat" placeholder="Apostila / Aula"><input id="dDet" placeholder="Página / exercício"></div>
+  <div class="dbtns"><button type="button" id="dCancel">Cancelar</button><button class="pri">Adicionar</button></div>
+</form></dialog>
+<dialog id="dlgCfg"><form id="formCfg" method="dialog">
+  <h3>Configurar inteligência artificial</h3>
+  <label for="cProv">Provedor usado no app</label>
+  <select id="cProv"><option value="gemini">Google Gemini</option><option value="openai">OpenAI (ChatGPT)</option><option value="anthropic">Anthropic (Claude)</option></select>
+  <label for="cGemKey">Chave da API Google Gemini</label><input id="cGemKey" type="password" autocomplete="off" placeholder="AIza…">
+  <label for="cOpenKey">Chave da API OpenAI / ChatGPT</label><input id="cOpenKey" type="password" autocomplete="off" placeholder="sk-…">
+  <label for="cAnthKey">Chave da API Anthropic / Claude</label><input id="cAnthKey" type="password" autocomplete="off" placeholder="sk-ant-…">
+  <label for="cModel">Modelo (opcional)</label><input id="cModel" placeholder="Deixe vazio para usar o padrão">
+  <p class="muted"><b>Privacidade:</b> as chaves ficam salvas somente neste navegador (armazenamento local) e são enviadas diretamente ao provedor escolhido. Não compartilhe este aparelho. Para maior segurança em um site público, use um servidor próprio como intermediário.</p>
+  <div class="dbtns"><button type="button" id="cCancel">Cancelar</button><button class="pri">Salvar</button></div>
+</form></dialog>
+<dialog id="dlgMaterias"><div class="row-head"><h3 style="margin:0">Matérias</h3><button type="button" id="dmFechar">✕</button></div>
+  <input id="buscaMat2" placeholder="Buscar matéria…" autocomplete="off" style="margin-top:10px">
+  <div id="listaMaterias2" class="matlist"></div>
+  <button class="pri" data-novamat="1" style="width:100%;margin-top:12px">Nova matéria</button></dialog>
+<input type="file" id="apFile" accept="application/pdf" hidden>
+<input type="file" id="apUp" accept="application/pdf" multiple hidden>
+<dialog id="dlgQuestoes" class="questoes">
+  <header class="qtop">
+    <div class="qrow">
+      <button type="button" id="qFechar" class="qbtn" aria-label="Fechar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      <div class="qtit"><small id="qMat"></small><b id="qTitulo"></b></div>
+      <span class="qcount" id="qResp"></span>
+      <div class="qscore" id="qScore" aria-live="polite"></div>
+      <button type="button" id="qFull" class="qbtn" title="Tela cheia" aria-label="Tela cheia"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+    </div>
+    <div class="qprog"><div class="qbar" id="qBar"></div></div>
+  </header>
+  <div id="qCorpo" class="qcorpo"><div id="qLista"></div></div>
+</dialog>
+<dialog id="dlgLeitor" class="leitor">
+  <div class="lhead">
+    <div class="lr1">
+      <div class="ltit"><small id="lSub"></small><b id="lTitulo"></b></div>
+      <label class="lfeito" id="lFeitoBox" hidden title="Marcar a apostila como concluída e enviar para Revisão"><input type="checkbox" id="lFeito"><span>Terminei</span></label>
+      <button type="button" id="lFechar" class="lx" aria-label="Fechar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+    <div class="lr2 lnav">
+      <div class="lseg lpg" role="group" aria-label="Página">
+        <button type="button" id="lPrev" aria-label="Página anterior"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button>
+        <input id="lPag" type="number" min="1" aria-label="Número da página"><span id="lTotal"></span>
+        <button type="button" id="lNext" aria-label="Próxima página"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>
+      </div>
+      <div class="lseg ltx" role="group" aria-label="Texto"><button type="button" id="lMenos" title="Diminuir a letra" aria-label="Diminuir a letra">A−</button><button type="button" id="lMais" title="Aumentar a letra" aria-label="Aumentar a letra">A+</button></div>
+      <span class="lsp"></span>
+      <button type="button" id="lFull" class="lb" title="Tela cheia" aria-label="Tela cheia"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg><span class="lbl">Tela cheia</span></button>
+      <button type="button" id="lAba" class="lb" title="Abrir o PDF original em outra aba"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg><span class="lbl">Nova aba</span></button>
+      <select id="lQtd"><option value="1">1 pág.</option><option value="3" selected>3 págs.</option><option value="5">5 págs.</option></select><button type="button" id="lIA" class="pri">Ler com IA</button>
+    </div>
+  </div>
+  <div id="lCorpo" class="lcorpo"></div>
+</dialog>
+<script type="module" src="js/app.js"></script>
+<script type="module" src="js/ui.js"></script>
+<script type="module" src="js/simulado.js"></script>
+<script type="module" src="js/lembretes.js"></script>
+<script type="module" src="js/pwa.js"></script>
+</body>
+</html>
